@@ -1511,9 +1511,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeOKFrame();
     }
   } else if (cmd_frame[0] == CMD_REBOOT && memcmp(&cmd_frame[1], "reboot", 6) == 0) {
-    if (dirty_contacts_expiry) { // is there are pending dirty contacts write needed?
-      saveContacts();
-    }
+    flushPendingWrites();
     board.reboot();
   } else if (cmd_frame[0] == CMD_GET_BATT_AND_STORAGE) {
     uint8_t reply[11];
@@ -2099,11 +2097,13 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp, char*
   }
 
   if (strcmp(command, "reboot") == 0) {
+    flushPendingWrites();
     board.reboot(); // doesn't return
     return true;
   }
 
   if (strcmp(command, "poweroff") == 0 || strcmp(command, "shutdown") == 0) {
+    flushPendingWrites();
     board.powerOff(); // doesn't return
     return true;
   }
