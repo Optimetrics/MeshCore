@@ -311,15 +311,8 @@ public:
         display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 32, tmp);
       #endif
-      if (_task->hasConnection()) {
-        display.setColor(UIColor::warning_txt);
-        display.setTextSize(1);
-        #ifdef UI_SHOW_CLOCK
-        display.drawTextCentered(display.width() / 2, 110, "< Connected >");
-        #else
-        display.drawTextCentered(display.width() / 2, 43, "< Connected >");
-        #endif
-      } else if (the_mesh.getBLEPin() != 0) { // BT pin
+      // BT pin stays up until a phone pairs over BLE, even while a USB client is attached
+      if (the_mesh.getBLEPin() != 0 && _task->isBluetoothEnabled() && !_task->isBluetoothConnected()) {
         display.setColor(UIColor::warning_txt);
         sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
         #ifdef UI_SHOW_CLOCK
@@ -328,6 +321,14 @@ public:
         #else
         display.setTextSize(2);
         display.drawTextCentered(display.width() / 2, 43, tmp);
+        #endif
+      } else if (_task->hasConnection()) {
+        display.setColor(UIColor::warning_txt);
+        display.setTextSize(1);
+        #ifdef UI_SHOW_CLOCK
+        display.drawTextCentered(display.width() / 2, 110, "< Connected >");
+        #else
+        display.drawTextCentered(display.width() / 2, 43, "< Connected >");
         #endif
       }
     } else if (_page == HomePage::RECENT) {
