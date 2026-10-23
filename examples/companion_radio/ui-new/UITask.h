@@ -82,8 +82,19 @@ class UITask : public AbstractUITask {
 #ifdef UI_EINK_IDLE_CLEANUP_SECS
   unsigned long _last_input_at = 0, _last_cleanup_at = 0;
   bool _used_since_cleanup = false;
-  void noteInput() { _last_input_at = millis(); _used_since_cleanup = true; }
 #endif
+  void noteInput() {
+#ifdef UI_EINK_IDLE_CLEANUP_SECS
+    _last_input_at = millis();
+    _used_since_cleanup = true;
+#endif
+  }
+#ifdef UI_ENTER_BTN
+  bool _backlight_on = false;
+  unsigned long _backlight_on_at = 0;
+  void setBacklight(bool on);
+#endif
+  bool _cli_rescue_shown = false;
 
 #ifdef PIN_USER_BTN_ANA
   unsigned long _analogue_pin_read_millis = millis();
@@ -110,12 +121,15 @@ public:
     next_batt_chck = _next_refresh = 0;
     ui_started_at = 0;
     curr = NULL;
+    msg_preview = NULL;
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
 
   void gotoHomeScreen() { setCurrScreen(home); }
   void showAlert(const char* text, int duration_millis);
   int  getMsgCount() const { return _msgcount; }
+  int  getUnreadCount() const;   // inbox messages not yet seen on the device or synced to the phone
+  void showInbox();
   bool hasDisplay() const { return _display != NULL; }
   bool isEinkDisplay() const { return _display != NULL && _display->isEink(); }
   bool isButtonPressed() const;
@@ -145,4 +159,6 @@ public:
   void loop() override;
 
   void shutdown(bool restart = false, bool low_battery = false);
+  void showNewMessage(const char* from);
+  bool readerConnected() const;
 };

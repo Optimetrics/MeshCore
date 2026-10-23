@@ -20,7 +20,9 @@ enum class UIEventType {
     channelMessage,
     roomMessage,
     newContactMessage,
-    ack
+    ack,
+    toggleOn,    // something switched on (rising tone)
+    toggleOff    // and off (falling tone)
 };
 
 class AbstractUITask : public MyMesh::Listener {

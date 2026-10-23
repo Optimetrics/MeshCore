@@ -39,8 +39,22 @@ static void formatAge(char* buf, int secs, bool coarse) {
 
 #if UI_HAS_JOYSTICK || UI_HAS_ROTARY_INPUT
   #define PRESS_LABEL "press Enter"
+#elif defined(UI_ENTER_BTN)
+  #define PRESS_LABEL "upper btn"   // a second button is Enter
 #else
   #define PRESS_LABEL "long press"
+#endif
+
+// a clock earlier than the day this firmware was built was never set (a chip-less board
+// boots its fallback clock at a fixed 2024 date)
+static uint32_t buildEpoch() {
+  static uint32_t epoch = DateTime(__DATE__, "00:00:00").unixtime();
+  return epoch;
+}
+
+// a serial link outside nRF52 TinyUSB always reports "connected", so it can't tell us a reader is there
+#if (defined(ENABLE_USB_INTERFACE) && !(defined(NRF52_PLATFORM) && defined(USE_TINYUSB))) || defined(SERIAL_RX)
+  #define UI_LINK_UNDETECTABLE 1
 #endif
 
 #include "icons.h"
@@ -133,6 +147,26 @@ class HomeScreen : public UIScreen {
   bool _shutdown_init;
   AdvertPath recent[UI_RECENT_LIST_SIZE];
   int _shown_batt_pct = -1;
+  uint8_t _confirm_page = 0xFF;     // page waiting for a second Enter, if any
+  unsigned long _confirm_at = 0;    // when the first Enter came
+
+  // destructive actions need a second Enter within 3 s (a quick click is easy to hit in a pocket)
+  bool confirmEnter() {
+#ifdef UI_ENTER_BTN
+    if (confirmPending()) {
+      _confirm_page = 0xFF;
+      return true;
+    }
+    _confirm_page = _page;
+    _confirm_at = millis();
+    return false;
+#else
+    return true;   // Enter is already a long press here
+#endif
+  }
+  bool confirmPending() const {
+    return _confirm_page == _page && millis() - _confirm_at < 3000;
+  }
 #if UI_DISCOVER_SCREEN
   DiscoveredNode discovered[DISCOVERED_NODES_TABLE_SIZE]; // not circular, latest discovered nodes are not kept
   uint32_t disc_node_req_tag = 0;
@@ -141,7 +175,7 @@ class HomeScreen : public UIScreen {
   bool discovery_disp_names = true; // by default desplay names if available (removes SNR_O)
 #endif
 
-#if ENV_INCLUDE_GPS == 1 && defined(UI_TRACK_PAGE)
+#if defined(UI_TRACK_PAGE) || defined(UI_RECENT_DETAIL)
   static double distanceMeters(double lat1, double lon1, double lat2, double lon2) {
     const double r = 6371000.0, d2r = M_PI / 180.0;
     double dlat = (lat2 - lat1) * d2r, dlon = (lon2 - lon1) * d2r;
@@ -160,6 +194,9 @@ class HomeScreen : public UIScreen {
     static const char* points[] = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
     return points[(int)((brg + 22.5) / 45) % 8];
   }
+#endif
+
+#if ENV_INCLUDE_GPS == 1 && defined(UI_TRACK_PAGE)
 
   // the three most recently heard favourites that share a position: how far, which way, when last heard
   void renderTracking(DisplayDriver& display) {
@@ -216,7 +253,8 @@ class HomeScreen : public UIScreen {
   }
 #endif
 
-  void renderBatteryIndicator(DisplayDriver& display, uint16_t batteryMilliVolts) {
+  // returns the x where the status icons start, so the node name can stop short of them
+  int renderBatteryIndicator(DisplayDriver& display, uint16_t batteryMilliVolts) {
     // Convert millivolts to percentage
 #ifndef BATT_MIN_MILLIVOLTS
   #define BATT_MIN_MILLIVOLTS 3000
@@ -267,6 +305,10 @@ class HomeScreen : public UIScreen {
     int fillWidth = (batteryPercentage * (iconWidth - 4)) / 100;
     display.fillRect(iconX + 2, iconY + 2, fillWidth, iconHeight - 4);
 
+    // status icons go right to left from the battery, each in the next free 9px slot:
+    // charging, muted, phone connected, GPS fix, unread mail
+    int x = iconX;
+
     // while charging, show a bolt (or a plug once full) just left of the battery,
     // keeping the fill bar itself clean and uninterrupted
     bool charging = board.isExternalPowered();
@@ -276,17 +318,35 @@ class HomeScreen : public UIScreen {
       const int BATT_FULL_PCT = 95;
       const uint8_t* symbol = (batteryPercentage >= BATT_FULL_PCT) ? plug_icon : charging_icon;
       display.setColor(UIColor::title_txt);
-      display.drawXbm(iconX - 9, iconY + 1, symbol, 8, 8);
+      display.drawXbm(x -= 9, iconY + 1, symbol, 8, 8);
     }
 
-    // show muted icon if buzzer is muted (shifted further left when the charging
-    // icon already occupies the slot immediately left of the battery)
 #ifdef PIN_BUZZER
     if (_task->isBuzzerQuiet()) {
       display.setColor(UIColor::warning_txt);
-      display.drawXbm(iconX - (charging ? 18 : 9), iconY + 1, muted_icon, 8, 8);
+      display.drawXbm(x -= 9, iconY + 1, muted_icon, 8, 8);
     }
 #endif
+#ifdef UI_STATUS_ICONS
+    display.setColor(UIColor::title_txt);
+    if (_task->isBluetoothConnected()) {
+      display.drawXbm(x -= 9, iconY + 1, ble_link_icon, 8, 8);
+    }
+  #if ENV_INCLUDE_GPS == 1
+    LocationProvider* loc = sensors.getLocationProvider();
+    if (loc != NULL && _task->getGPSState()) {
+      // between duty-cycled fixes the last one still counts while it is within an interval
+      const char* iv = _task->getSensorSetting("gps_interval");
+      uint32_t max_age = 300;
+      if (iv != NULL && (uint32_t)atol(iv) + 60 > max_age) max_age = atol(iv) + 60;
+      if (loc->getFixAgeSecs() <= max_age) display.drawXbm(x -= 9, iconY + 1, gps_fix_icon, 8, 8);
+    }
+  #endif
+    if (_task->getUnreadCount() > 0) {
+      display.drawXbm(x -= 9, iconY + 1, mail_icon, 8, 8);
+    }
+#endif
+    return x;
   }
 
   CayenneLPP sensors_lpp;
@@ -365,16 +425,15 @@ public:
     display.setColor(UIColor::title_bkg);
     display.fillRect(0, 0, display.width(), 12);
     char tmp[80];
+    // battery and status icons first, so the node name can stop short of them
+    int icons_x = renderBatteryIndicator(display, _task->getBattMilliVolts());
+
     // node name
     display.setTextSize(1);
     display.setColor(UIColor::title_txt);
     char filtered_name[sizeof(_node_prefs->node_name)];
     display.translateUTF8ToBlocks(filtered_name, _node_prefs->node_name, sizeof(filtered_name));
-    display.setCursor(0, 2);
-    display.print(filtered_name);
-
-    // battery voltage
-    renderBatteryIndicator(display, _task->getBattMilliVolts());
+    display.drawTextEllipsized(0, 2, icons_x - 2, filtered_name);
 
     // curr page indicator
     if (UIColor::title_bkg == UIColor::window_bkg) {
@@ -402,19 +461,25 @@ public:
       #else
       // larger unread message ui for non wifi variants
       display.setTextSize(2);
-      sprintf(tmp, "MSG: %d", _task->getMsgCount());
+      sprintf(tmp, "MSG: %d", _task->getUnreadCount());
       display.drawTextCentered(display.width() / 2, 22, tmp);
       #endif
       #ifdef UI_SHOW_CLOCK
       display.setTextSize(3);
       uint32_t now = _rtc->getCurrentTime();
-      now += (int32_t)(_node_prefs->tz_offset * 3600);
-      DateTime dt (now);
-      sprintf(tmp, "%02d:%02d", dt.hour(), dt.minute());
-      display.drawTextCentered(display.width() / 2, 60, tmp);
-      display.setTextSize(1);
-      sprintf(tmp, "%02d/%02d/%d", dt.day(), dt.month(), dt.year());
-      display.drawTextCentered(display.width() / 2, 80, tmp);
+      if (now < buildEpoch()) {   // not synced from the phone, GPS or a clock chip yet
+        display.drawTextCentered(display.width() / 2, 60, "--:--");
+        display.setTextSize(1);
+        display.drawTextCentered(display.width() / 2, 80, "time not set");
+      } else {
+        now += (int32_t)(_node_prefs->tz_offset * 3600);
+        DateTime dt (now);
+        sprintf(tmp, "%02d:%02d", dt.hour(), dt.minute());
+        display.drawTextCentered(display.width() / 2, 60, tmp);
+        display.setTextSize(1);
+        sprintf(tmp, "%02d/%02d/%d", dt.day(), dt.month(), dt.year());
+        display.drawTextCentered(display.width() / 2, 80, tmp);
+      }
       #endif
       #ifdef ENABLE_WIFI_INTERFACE
         IPAddress ip = WiFi.localIP();
@@ -427,8 +492,9 @@ public:
         display.setColor(UIColor::warning_txt);
         sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
         #ifdef UI_SHOW_CLOCK
-        display.setTextSize(1);
-        display.drawTextCentered(display.width() / 2, 110, tmp);
+        // big enough to read off while pairing, when there is room below the clock
+        display.setTextSize(display.height() > 64 ? 2 : 1);
+        display.drawTextCentered(display.width() / 2, display.height() > 64 ? 100 : 110, tmp);
         #else
         display.setTextSize(2);
         display.drawTextCentered(display.width() / 2, 43, tmp);
@@ -454,6 +520,39 @@ public:
 
         int timestamp_width = display.getTextWidth(tmp);
         int max_name_width = display.width() - timestamp_width - 1;
+#ifdef UI_RECENT_DETAIL
+        // right to left before the age: distance when both ends have a position, then
+        // signal bars for a direct neighbour or the hop count for one further away
+        int right = display.width() - timestamp_width - 4;
+        char detail[12];
+        ContactInfo* ci = the_mesh.lookupContactByPubKey(a->pubkey_prefix, sizeof(a->pubkey_prefix));
+        if (ci != NULL && (ci->gps_lat != 0 || ci->gps_lon != 0) && (sensors.node_lat != 0 || sensors.node_lon != 0)) {
+          double d = distanceMeters(sensors.node_lat, sensors.node_lon, ci->gps_lat / 1000000.0, ci->gps_lon / 1000000.0);
+          if (d < 1000) sprintf(detail, "%dm", (int)d);
+          else if (d < 100000) sprintf(detail, "%.1fk", d / 1000);
+          else sprintf(detail, "%dk", (int)(d / 1000));
+          int w = display.getTextWidth(detail);
+          display.setCursor(right - w, y);
+          display.print(detail);
+          right -= w + 3;
+        }
+        int hops = a->path_len & 63;
+        if (hops == 0) {
+          int bars = a->snr_x4 >= 20 ? 4 : a->snr_x4 >= 0 ? 3 : a->snr_x4 >= -20 ? 2 : a->snr_x4 >= -40 ? 1 : 0;
+          for (int b = 0; b < 4; b++) {   // rising bars, unlit ones as a stub
+            int h = b < bars ? 2 + 2 * b : 1;
+            display.fillRect(right - 11 + b * 3, y + 9 - h, 2, h);
+          }
+          right -= 14;
+        } else {
+          sprintf(detail, "%dhop", hops);   // not "h", which reads as hours next to the age
+          int w = display.getTextWidth(detail);
+          display.setCursor(right - w, y);
+          display.print(detail);
+          right -= w + 3;
+        }
+        max_name_width = right;
+#endif
 
         char filtered_recent_name[sizeof(a->name)];
         display.translateUTF8ToBlocks(filtered_recent_name, a->name, sizeof(filtered_recent_name));
@@ -488,7 +587,12 @@ public:
           32, 32);
       display.setColor(UIColor::secondary_txt);
       display.setTextSize(1);
-      display.drawTextCentered(display.width() / 2, 64 - 11, "toggle: " PRESS_LABEL);
+      if (confirmPending()) {
+        display.setColor(UIColor::warning_txt);
+        display.drawTextCentered(display.width() / 2, 64 - 11, "again: turn BT off");
+      } else {
+        display.drawTextCentered(display.width() / 2, 64 - 11, "toggle: " PRESS_LABEL);
+      }
 #endif
     } else if (_page == HomePage::ADVERT) {
       display.setColor(UIColor::corp_blue);
@@ -695,23 +799,31 @@ public:
       } else {
         display.setColor(UIColor::secondary_txt);
         display.drawXbm((display.width() - 32) / 2, 18, power_icon, 32, 32);
-        display.drawTextCentered(display.width() / 2, 64 - 11, "hibernate:" PRESS_LABEL);
+        if (confirmPending()) {
+          display.setColor(UIColor::warning_txt);
+          display.drawTextCentered(display.width() / 2, 64 - 11, "again: hibernate");
+        } else {
+          display.drawTextCentered(display.width() / 2, 64 - 11, "hibernate:" PRESS_LABEL);
+        }
       }
 #endif
     }
 #if ENV_INCLUDE_GPS == 1 && defined(UI_TRACK_PAGE)
     if (_page == HomePage::TRACK) return 30000;   // positions only change with adverts
 #endif
+    if (confirmPending()) return 1000;   // take the "again:" hint down when the window closes
     return 5000;   // next render after 5000 ms
   }
 
   bool handleInput(char c) override {
     if (c == KEY_LEFT || c == KEY_PREV) {
       _page = (_page + HomePage::Count - 1) % HomePage::Count;
+      _confirm_page = 0xFF;   // leaving a page drops its pending confirm
       return true;
     }
     if (c == KEY_NEXT || c == KEY_RIGHT) {
       _page = (_page + 1) % HomePage::Count;
+      _confirm_page = 0xFF;
       // page-name pop-ups cost an e-ink panel two extra refreshes, so skip them there
       if (_page == HomePage::RECENT && !_task->isEinkDisplay()) {
         _task->showAlert("Recent adverts", 800);
@@ -723,12 +835,19 @@ public:
 #endif
       return true;
     }
+    if (c == KEY_ENTER && _page == HomePage::FIRST) {
+      _task->showInbox();
+      return true;
+    }
 #ifdef BLE_PIN_CODE
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
+        if (!confirmEnter()) return true;   // turning it off drops the phone: ask first
         _task->disableBluetooth();
+        _task->notify(UIEventType::toggleOff);
       } else {
         _task->enableBluetooth();
+        _task->notify(UIEventType::toggleOn);
       }
       if (_task->hasDisplay()) {   // headless builds can't see this page, so never make it stick there
         _node_prefs->ble_disabled = _task->isBluetoothEnabled() ? 0 : 1;
@@ -773,7 +892,7 @@ public:
 #endif
 #ifndef UI_NO_HIBERNATE
     if (c == KEY_ENTER && _page == HomePage::SHUTDOWN) {
-      _shutdown_init = true;  // need to wait for button to be released
+      if (confirmEnter()) _shutdown_init = true;  // need to wait for button to be released
       return true;
     }
 #endif
@@ -785,63 +904,108 @@ public:
   #define UI_MSG_PREVIEW_SIZE 78
 #endif
 
+// the last MAX_INBOX_MSGS messages, newest first; they stay after being read or synced to the phone
 class MsgPreviewScreen : public UIScreen {
   UITask* _task;
   mesh::RTCClock* _rtc;
 
   struct MsgEntry {
-    uint32_t timestamp;
+    unsigned long rx_millis;   // not the RTC: the clock may only get set after it arrived
     char origin[62];
     char msg[UI_MSG_PREVIEW_SIZE];
+    bool read;
   };
-  #define MAX_UNREAD_MSGS   32
-  int num_unread;
-  int head = MAX_UNREAD_MSGS - 1; // index of latest unread message
-  MsgEntry unread[MAX_UNREAD_MSGS];
+  #define MAX_INBOX_MSGS   32
+  int num_unread = 0;
+  int count = 0;                   // messages held, up to MAX_INBOX_MSGS
+  int head = MAX_INBOX_MSGS - 1;   // index of the newest message
+  int cursor = 0;                  // shown message: 0 = newest
+  MsgEntry entries[MAX_INBOX_MSGS];
   int _page_start = 0;    // where the shown part of a long message starts
   int _page_len = 0;      // how much of it fitted on screen
   bool _page_more = false;
+  bool _user_view = false;  // the user opened the inbox or pressed a key here (not just an auto-show)
+
+  MsgEntry* at(int pos) { return &entries[(head - pos + MAX_INBOX_MSGS) % MAX_INBOX_MSGS]; }
+
+  void markShownRead() {
+    if (count == 0) return;
+    if (cursor >= count) cursor = count - 1;
+    auto p = at(cursor);
+    if (!p->read) {
+      p->read = true;
+      num_unread--;
+    }
+  }
 
 public:
-  MsgPreviewScreen(UITask* task, mesh::RTCClock* rtc) : _task(task), _rtc(rtc) { num_unread = 0; }
+  MsgPreviewScreen(UITask* task, mesh::RTCClock* rtc) : _task(task), _rtc(rtc) { }
 
   void addPreview(uint8_t path_len, const char* from_name, const char* msg) {
-    head = (head + 1) % MAX_UNREAD_MSGS;
-    if (num_unread < MAX_UNREAD_MSGS) num_unread++;
+    head = (head + 1) % MAX_INBOX_MSGS;
+    if (count < MAX_INBOX_MSGS) count++;
+    else if (!entries[head].read) num_unread--;   // the oldest one drops off unread
 
-    auto p = &unread[head];
-    p->timestamp = _rtc->getCurrentTime();
+    auto p = &entries[head];
+    p->rx_millis = millis();
     if (path_len == 0xFF) {
       sprintf(p->origin, "(D) %s:", from_name);
     } else {
-      sprintf(p->origin, "(%d) %s:", (uint32_t) path_len, from_name);
+      sprintf(p->origin, "(%d) %s:", (uint32_t) (path_len & 63), from_name);   // hop count, without the hash-size bits
     }
     StrHelper::strncpy(p->msg, msg, sizeof(p->msg));
-    _page_start = 0;   // the new message is shown from its beginning
+    p->read = false;
+    num_unread++;
+    if (!_task->readerConnected() || count == 1) {   // no phone: the new message is the one shown
+      cursor = 0;
+      _page_start = 0;
+      _page_more = false;
+      _user_view = false;   // shown automatically, so not read yet
+    } else if (cursor < count - 1) {
+      cursor++;   // a phone only gets a banner: keep the reader on the same message
+    }
   }
 
+  int unreadCount() const { return num_unread; }
+  int size() const { return count; }
+
+  // the phone has synced them, so they've been seen there
+  void markAllRead() {
+    for (int i = 0; i < count; i++) at(i)->read = true;
+    num_unread = 0;
+  }
+
+  void showNewest() { cursor = 0; _page_start = 0; _user_view = true; }
+
   int render(DisplayDriver& display) override {
-    char tmp[16];
+    char tmp[24];
     display.setCursor(0, 0);
     display.setTextSize(1);
     display.setColor(UIColor::corp_blue);
-    sprintf(tmp, "Unread: %d", num_unread);
+    if (count == 0) {
+      display.print("Inbox");
+      display.drawRect(0, 11, display.width(), 1);
+      display.setColor(UIColor::secondary_txt);
+      display.drawTextCentered(display.width() / 2, 30, "No messages yet");
+      return 60000;
+    }
+    if (cursor >= count) cursor = count - 1;
+    if (_user_view) markShownRead();   // an auto-shown message stays unread until someone looks
+    auto p = at(cursor);
+    sprintf(tmp, "Msg %d/%d", cursor + 1, count);
     display.print(tmp);
 
-    auto p = &unread[head];
-
-    int secs = _rtc->getCurrentTime() - p->timestamp;
+    int secs = (int)((millis() - p->rx_millis) / 1000);
     formatAge(tmp, secs, display.isEink());
     display.setCursor(display.width() - display.getTextWidth(tmp) - 2, 0);
     display.print(tmp);
 
     display.drawRect(0, 11, display.width(), 1);  // horiz line
 
-    display.setCursor(0, 14);
     display.setColor(UIColor::secondary_txt);
     char filtered_origin[sizeof(p->origin)];
     display.translateUTF8ToBlocks(filtered_origin, p->origin, sizeof(filtered_origin));
-    display.print(filtered_origin);
+    display.drawTextEllipsized(0, 14, display.width(), filtered_origin);   // one line, whatever the name
 
     display.setCursor(0, 25);
     display.setColor(UIColor::primary_txt);
@@ -866,21 +1030,30 @@ public:
   }
 
   bool handleInput(char c) override {
-    if (c == KEY_NEXT || c == KEY_RIGHT) {
-      if (_page_more) {   // rest of a long message first
+    markShownRead();   // a press here means the message on screen has been seen
+    _user_view = true;
+    if (c == KEY_NEXT || c == KEY_RIGHT) {   // rest of a long message, else the next older one
+      if (_page_more) {
         _page_start += _page_len;
-        return true;
-      }
-      _page_start = 0;
-      head = (head + MAX_UNREAD_MSGS - 1) % MAX_UNREAD_MSGS;
-      num_unread--;
-      if (num_unread == 0) {
-        _task->gotoHomeScreen();
+      } else if (cursor < count - 1) {
+        cursor++;
+        _page_start = 0;
+      } else {
+        _task->gotoHomeScreen();   // past the oldest
       }
       return true;
     }
-    if (c == KEY_ENTER) {
-      num_unread = 0;  // clear unread queue
+    if (c == KEY_PREV || c == KEY_LEFT) {   // back to the start of this one, else the next newer one
+      if (_page_start > 0) {
+        _page_start = 0;
+      } else if (cursor > 0) {
+        cursor--;
+      } else {
+        _task->gotoHomeScreen();   // before the newest
+      }
+      return true;
+    }
+    if (c == KEY_ENTER) {   // back home; the messages stay
       _page_start = 0;
       _task->gotoHomeScreen();
       return true;
@@ -896,6 +1069,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
 #if defined(PIN_USER_BTN)
   user_btn.begin();
+#endif
+#ifdef UI_ENTER_BTN
+  enter_btn.begin();
 #endif
 #if defined(PIN_USER_BTN_ANA)
   analog_btn.begin();
@@ -948,6 +1124,12 @@ switch(t){
   case UIEventType::ack:
     buzzer.play("ack:d=32,o=8,b=120:c");
     break;
+  case UIEventType::toggleOn:
+    buzzer.play("on:d=32,o=6,b=200:c,e,g");
+    break;
+  case UIEventType::toggleOff:
+    buzzer.play("off:d=32,o=6,b=200:g,e,c");
+    break;
   case UIEventType::roomMessage:
   case UIEventType::newContactMessage:
   case UIEventType::none:
@@ -970,19 +1152,9 @@ void UITask::onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t t
 
   uint8_t path_len = pkt->isRouteFlood() ? pkt->path_len : 0xFF;
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from.name, text);
-  setCurrScreen(msg_preview);
-
-  if (_display != NULL) {
-    if (!_display->isOn() && !hasConnection()) {
-      _display->turnOn();
-    }
-    if (_display->isOn()) {
-    _auto_off = millis() + AUTO_OFF_MILLIS;  // extend the auto-off timer
-    _next_refresh = 100;  // trigger refresh
-    }
-  }
-
-  if (!hasConnection()) {
+  showNewMessage(from.name);
+  // a DM always beeps, phone or not; room-server posts (signed) are group traffic, so only without one
+  if (txt_type == TXT_TYPE_PLAIN || !hasConnection()) {
     notify(UIEventType::contactMessage);
   }
 }
@@ -990,7 +1162,31 @@ void UITask::onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t t
 void UITask::onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_details, const char* text) {
   uint8_t path_len = pkt->isRouteFlood() ? pkt->path_len : 0xFF;
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, channel_details.name, text);
-  setCurrScreen(msg_preview);
+  showNewMessage(channel_details.name);
+  if (!hasConnection()) {   // with a phone connected, it notifies for channels
+    notify(UIEventType::channelMessage);
+  }
+}
+
+// whether someone is reading on a connected phone or app, so the device shouldn't take over its screen
+bool UITask::readerConnected() const {
+#ifdef UI_LINK_UNDETECTABLE
+  return isBluetoothConnected();   // the serial link is no evidence of a reader
+#else
+  return hasConnection();
+#endif
+}
+
+// with no phone, the device is where it's read, so show it; with one, just a banner
+void UITask::showNewMessage(const char* from) {
+  if (!readerConnected() && !_cli_rescue_shown) {
+    setCurrScreen(msg_preview);
+  } else if (_display != NULL) {
+    char name[32], banner[48];
+    _display->translateUTF8ToBlocks(name, from, sizeof(name));
+    snprintf(banner, sizeof(banner), "Msg: %s", name);
+    showAlert(banner, 1500);
+  }
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection()) {
@@ -1001,16 +1197,21 @@ void UITask::onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_det
     _next_refresh = 100;  // trigger refresh
     }
   }
+}
 
-  if (!hasConnection()) {
-    notify(UIEventType::channelMessage);
-  }
+void UITask::showInbox() {
+  ((MsgPreviewScreen *) msg_preview)->showNewest();
+  setCurrScreen(msg_preview);
+}
+
+int UITask::getUnreadCount() const {
+  return msg_preview ? ((MsgPreviewScreen *) msg_preview)->unreadCount() : 0;
 }
 
 void UITask::onQueueSizeChanged(int msgcount) {
   _msgcount = msgcount;
-  if (msgcount == 0) {
-    gotoHomeScreen();
+  if (msgcount == 0 && msg_preview) {   // the phone has them all now
+    ((MsgPreviewScreen *) msg_preview)->markAllRead();
   }
 }
 
@@ -1033,9 +1234,14 @@ void UITask::userLedHandler() {
   unsigned long cur_time = millis();
   if (cur_time - led_changed_at >= led_phase_millis) {   // rollover-safe
     led_changed_at = cur_time;
+  #ifdef UI_STATUS_LED_UNREAD_ONLY
+    int waiting = getUnreadCount();   // messages not yet seen on the device (or synced to the phone)
+  #else
+    int waiting = _msgcount;
+  #endif
     if (led_state == 0) {
       led_state = 1;
-      if (_msgcount > 0) {
+      if (waiting > 0) {
         last_led_increment = LED_ON_MSG_MILLIS;
       } else {
         last_led_increment = LED_ON_MILLIS;
@@ -1046,7 +1252,7 @@ void UITask::userLedHandler() {
       led_phase_millis = LED_CYCLE_MILLIS - last_led_increment;
     }
   #ifdef UI_STATUS_LED_UNREAD_ONLY
-    bool lit = led_state == 1 && _msgcount > 0;   // dark unless messages are waiting
+    bool lit = led_state == 1 && waiting > 0;   // dark unless messages are waiting
   #else
     bool lit = led_state == 1;
   #endif
@@ -1056,6 +1262,7 @@ void UITask::userLedHandler() {
 }
 
 void UITask::setCurrScreen(UIScreen* c) {
+  if (_cli_rescue_shown) return;
   curr = c;
   _next_refresh = 100;
 }
@@ -1117,12 +1324,27 @@ void UITask::shutdown(bool restart, bool low_battery){
 }
 
 bool UITask::isButtonPressed() const {
+#ifdef UI_ENTER_BTN
+  if (enter_btn.isPressed()) return true;   // a button held into power-off would wake it straight back up
+#endif
 #ifdef PIN_USER_BTN
   return user_btn.isPressed();
 #else
   return false;
 #endif
 }
+
+#ifdef UI_ENTER_BTN
+void UITask::setBacklight(bool on) {
+  _backlight_on = on;
+  _backlight_on_at = millis();
+#if defined(DISP_BACKLIGHT)
+  digitalWrite(DISP_BACKLIGHT, on);
+#elif defined(EXP_PIN_BACKLIGHT)
+  expander.digitalWrite(EXP_PIN_BACKLIGHT, on);
+#endif
+}
+#endif
 
 void UITask::loop() {
   char c = 0;
@@ -1165,13 +1387,31 @@ void UITask::loop() {
   if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_NEXT);
   } else if (ev == BUTTON_EVENT_LONG_PRESS) {
+  #ifdef UI_ENTER_BTN
+    // Enter is on the other button, so a hold here is free for a clean e-ink refresh
+    if (handleLongPress(KEY_ENTER) != 0 && _display != NULL) {   // unless it opened the CLI rescue
+      noteInput();
+      _display->forceFullRefresh();
+      _next_refresh = 0;
+    }
+  #else
     c = handleLongPress(KEY_ENTER);
+  #endif
   } else if (ev == BUTTON_EVENT_DOUBLE_CLICK) {
     c = handleDoubleClick(KEY_PREV);
   } else if (ev == BUTTON_EVENT_TRIPLE_CLICK) {
     c = handleTripleClick(KEY_SELECT);
   }
-  #endif  
+  #endif
+#endif
+#ifdef UI_ENTER_BTN
+  int eev = enter_btn.check();
+  if (eev == BUTTON_EVENT_CLICK) {
+    c = checkDisplayOn(KEY_ENTER);
+  } else if (eev == BUTTON_EVENT_LONG_PRESS) {
+    noteInput();
+    setBacklight(!_backlight_on);   // hold: light for a while, hold again: off
+  }
 #endif
 #if defined(UI_HAS_ROTARY_INPUT)
   RotaryInputEvent rotaryEv = rotary_input.poll();
@@ -1198,7 +1438,9 @@ void UITask::loop() {
     _analogue_pin_read_millis = millis();
   }
 #endif
-#if defined(BACKLIGHT_BTN)
+#if defined(UI_ENTER_BTN) && defined(BACKLIGHT_TIMEOUT_MILLIS)
+  if (_backlight_on && millis() - _backlight_on_at >= BACKLIGHT_TIMEOUT_MILLIS) setBacklight(false);
+#elif defined(BACKLIGHT_BTN)
   if (millis() > next_backlight_btn_check) {
     bool touch_state = digitalRead(PIN_BUTTON2);
 #ifdef BACKLIGHT_TIMEOUT_MILLIS
@@ -1246,7 +1488,7 @@ void UITask::loop() {
           the_mesh.savePrefs();
         }
         if (!first_look) {
-          notify(UIEventType::ack);
+          notify(on ? UIEventType::toggleOn : UIEventType::toggleOff);
           showAlert(on ? "GPS on" : "GPS off", 800);
           _next_refresh = 0;   // draw it now
         }
@@ -1275,7 +1517,12 @@ void UITask::loop() {
         _display->fillRect(p, y, _display->width() - p*2, y);
         _display->setColor(UIColor::popup_txt);  // draw box border
         _display->drawRect(p, y, _display->width() - p*2, y);
-        _display->drawTextCentered(_display->width() / 2, y + p*3, _alert);
+        int box_w = _display->width() - p*2;
+        if (_display->getTextWidth(_alert) > box_w - 4) {   // e.g. a long sender name in "Msg: ..."
+          _display->drawTextEllipsized(p + 2, y + p*3, box_w - 4, _alert);
+        } else {
+          _display->drawTextCentered(_display->width() / 2, y + p*3, _alert);
+        }
         _next_refresh = _alert_expiry;   // will need refresh when alert is dismissed
       } else {
         _next_refresh = millis() + delay_millis;
@@ -1353,9 +1600,35 @@ char UITask::checkDisplayOn(char c) {
   return c;
 }
 
+// shown while the companion is in CLI rescue mode, which otherwise looks just like a hang
+class CliRescueScreen : public UIScreen {
+  UITask* _task;
+public:
+  CliRescueScreen(UITask* task) : _task(task) { }
+  int render(DisplayDriver& display) override {
+    display.setColor(UIColor::warning_txt);
+    display.setTextSize(2);
+    display.drawTextCentered(display.width() / 2, 4, "CLI rescue");
+    display.setTextSize(1);
+    display.setColor(UIColor::primary_txt);
+    display.drawTextCentered(display.width() / 2, 28, "serial console on USB");
+    display.drawTextCentered(display.width() / 2, 40, "app link is paused");
+    display.setColor(UIColor::secondary_txt);
+    display.drawTextCentered(display.width() / 2, 52, "restart: " PRESS_LABEL);
+    return 60000;
+  }
+  bool handleInput(char c) override {
+    if (c == KEY_ENTER) _task->shutdown(true);   // the way out: write anything pending, then reboot
+    return true;
+  }
+};
+
 char UITask::handleLongPress(char c) {
   if (millis() - ui_started_at < 8000) {   // long press in first 8 seconds since startup -> CLI/rescue
     the_mesh.enterCLIRescue();
+    static CliRescueScreen rescue(this);
+    setCurrScreen(&rescue);
+    _cli_rescue_shown = true;   // only a reboot leaves rescue mode, so nothing may replace its screen
     c = 0;   // consume event
   }
   return c;
@@ -1401,10 +1674,10 @@ void UITask::toggleGPS() {
         if (strcmp(_sensors->getSettingValue(i), "1") == 0) {
           _sensors->setSettingValue("gps", "0");
           _node_prefs->gps_enabled = 0;
-          notify(UIEventType::ack);
+          notify(UIEventType::toggleOff);
         } else if (_sensors->setSettingValue("gps", "1")) {
           _node_prefs->gps_enabled = 1;
-          notify(UIEventType::ack);
+          notify(UIEventType::toggleOn);
         } else {   // e.g. a hardware GPS switch that is off
           showAlert("GPS switch is off", 1000);
           _next_refresh = 0;
