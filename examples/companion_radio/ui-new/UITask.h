@@ -75,6 +75,11 @@ class UITask : public AbstractUITask {
   uint8_t low_batt_readings = 0;
 #endif
   bool _shutting_down = false;
+#ifdef UI_EINK_IDLE_CLEANUP_SECS
+  unsigned long _last_input_at = 0, _last_cleanup_at = 0;
+  bool _used_since_cleanup = false;
+  void noteInput() { _last_input_at = millis(); _used_since_cleanup = true; }
+#endif
 
 #ifdef PIN_USER_BTN_ANA
   unsigned long _analogue_pin_read_millis = millis();
@@ -108,6 +113,7 @@ public:
   void showAlert(const char* text, int duration_millis);
   int  getMsgCount() const { return _msgcount; }
   bool hasDisplay() const { return _display != NULL; }
+  bool isEinkDisplay() const { return _display != NULL && _display->isEink(); }
   bool isButtonPressed() const;
 
   bool isBuzzerQuiet() { 

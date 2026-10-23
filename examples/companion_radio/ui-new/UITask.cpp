@@ -20,6 +20,18 @@
 
 #define LONG_PRESS_MILLIS   1200
 
+// "12s" / "5m" / "3h"; coarse (for e-ink) never counts seconds, which would repaint the panel every few seconds
+static void formatAge(char* buf, int secs, bool coarse) {
+  if (secs < 60) {
+    if (coarse) strcpy(buf, "<1m");
+    else sprintf(buf, "%ds", secs);
+  } else if (secs < 60*60) {
+    sprintf(buf, "%dm", secs / 60);
+  } else {
+    sprintf(buf, "%dh", secs / (60*60));
+  }
+}
+
 // Used both for recent adverts and discovered nodes
 #ifndef UI_RECENT_LIST_SIZE
   #define UI_RECENT_LIST_SIZE 4
@@ -117,6 +129,7 @@ class HomeScreen : public UIScreen {
   uint8_t _page;
   bool _shutdown_init;
   AdvertPath recent[UI_RECENT_LIST_SIZE];
+  int _shown_batt_pct = -1;
 #if UI_DISCOVER_SCREEN
   DiscoveredNode discovered[DISCOVERED_NODES_TABLE_SIZE]; // not circular, latest discovered nodes are not kept
   uint32_t disc_node_req_tag = 0;
@@ -152,6 +165,12 @@ class HomeScreen : public UIScreen {
     if (batteryPercentage < 0) batteryPercentage = 0; // Clamp to 0%
     if (batteryPercentage > 100) batteryPercentage = 100; // Clamp to 100%
 #endif
+    // only move the icon on a real change, not on reading noise (each move repaints an e-ink panel)
+    if (_shown_batt_pct < 0 || abs(batteryPercentage - _shown_batt_pct) >= 3
+        || batteryPercentage == 0 || batteryPercentage == 100) {
+      _shown_batt_pct = batteryPercentage;
+    }
+    batteryPercentage = _shown_batt_pct;
 
     // battery icon
     int iconWidth = 24;
@@ -353,13 +372,7 @@ public:
         auto a = &recent[i];
         if (a->name[0] == 0) continue;  // empty slot
         int secs = _rtc->getCurrentTime() - a->recv_timestamp;
-        if (secs < 60) {
-          sprintf(tmp, "%ds", secs);
-        } else if (secs < 60*60) {
-          sprintf(tmp, "%dm", secs / 60);
-        } else {
-          sprintf(tmp, "%dh", secs / (60*60));
-        }
+        formatAge(tmp, secs, display.isEink());
 
         int timestamp_width = display.getTextWidth(tmp);
         int max_name_width = display.width() - timestamp_width - 1;
@@ -584,11 +597,12 @@ public:
     }
     if (c == KEY_NEXT || c == KEY_RIGHT) {
       _page = (_page + 1) % HomePage::Count;
-      if (_page == HomePage::RECENT) {
+      // page-name pop-ups cost an e-ink panel two extra refreshes, so skip them there
+      if (_page == HomePage::RECENT && !_task->isEinkDisplay()) {
         _task->showAlert("Recent adverts", 800);
       }
 #if UI_DISCOVER_SCREEN
-      if (_page == HomePage::DISCOVERY) {
+      if (_page == HomePage::DISCOVERY && !_task->isEinkDisplay()) {
         _task->showAlert("Repeater disc", 800);
       }
 #endif
@@ -669,6 +683,9 @@ class MsgPreviewScreen : public UIScreen {
   int num_unread;
   int head = MAX_UNREAD_MSGS - 1; // index of latest unread message
   MsgEntry unread[MAX_UNREAD_MSGS];
+  int _page_start = 0;    // where the shown part of a long message starts
+  int _page_len = 0;      // how much of it fitted on screen
+  bool _page_more = false;
 
 public:
   MsgPreviewScreen(UITask* task, mesh::RTCClock* rtc) : _task(task), _rtc(rtc) { num_unread = 0; }
@@ -685,6 +702,7 @@ public:
       sprintf(p->origin, "(%d) %s:", (uint32_t) path_len, from_name);
     }
     StrHelper::strncpy(p->msg, msg, sizeof(p->msg));
+    _page_start = 0;   // the new message is shown from its beginning
   }
 
   int render(DisplayDriver& display) override {
@@ -698,13 +716,7 @@ public:
     auto p = &unread[head];
 
     int secs = _rtc->getCurrentTime() - p->timestamp;
-    if (secs < 60) {
-      sprintf(tmp, "%ds", secs);
-    } else if (secs < 60*60) {
-      sprintf(tmp, "%dm", secs / 60);
-    } else {
-      sprintf(tmp, "%dh", secs / (60*60));
-    }
+    formatAge(tmp, secs, display.isEink());
     display.setCursor(display.width() - display.getTextWidth(tmp) - 2, 0);
     display.print(tmp);
 
@@ -720,7 +732,16 @@ public:
     display.setColor(UIColor::primary_txt);
     char filtered_msg[sizeof(p->msg)];
     display.translateUTF8ToBlocks(filtered_msg, p->msg, sizeof(filtered_msg));
-    display.printWordWrap(filtered_msg, display.width());
+    int len = strlen(filtered_msg);
+    if (_page_start > len) _page_start = 0;
+    int wrap_w = display.isEink() ? display.width() - 8 : display.width();   // keep clear of the "more" arrow
+    _page_len = display.printWordWrap(&filtered_msg[_page_start], wrap_w);
+    _page_more = _page_start + _page_len < len;
+    if (_page_more) {   // small down arrow in the corner: next press shows the rest
+      for (int r = 0; r < 3; r++) {
+        display.fillRect(display.width() - 7 + r, display.height() - 5 + r, 5 - 2*r, 1);
+      }
+    }
 
 #if AUTO_OFF_MILLIS==0 // probably e-ink
     return 10000; // 10 s
@@ -731,6 +752,11 @@ public:
 
   bool handleInput(char c) override {
     if (c == KEY_NEXT || c == KEY_RIGHT) {
+      if (_page_more) {   // rest of a long message first
+        _page_start += _page_len;
+        return true;
+      }
+      _page_start = 0;
       head = (head + MAX_UNREAD_MSGS - 1) % MAX_UNREAD_MSGS;
       num_unread--;
       if (num_unread == 0) {
@@ -740,6 +766,7 @@ public:
     }
     if (c == KEY_ENTER) {
       num_unread = 0;  // clear unread queue
+      _page_start = 0;
       _task->gotoHomeScreen();
       return true;
     }
@@ -1062,6 +1089,9 @@ void UITask::loop() {
 #ifdef BACKLIGHT_TIMEOUT_MILLIS
     // press (active low) starts or extends the timer; light stays on until it runs out
     if (!touch_state) backlight_off_at = millis() + BACKLIGHT_TIMEOUT_MILLIS;
+  #ifdef UI_EINK_IDLE_CLEANUP_SECS
+    if (!touch_state) noteInput();   // reading by the backlight counts as use
+  #endif
     bool light_on = millis() < backlight_off_at;
 #else
     bool light_on = !touch_state;  // lit only while held
@@ -1079,6 +1109,9 @@ void UITask::loop() {
     curr->handleInput(c);
     _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
     _next_refresh = 100;  // trigger refresh
+#ifdef UI_EINK_IDLE_CLEANUP_SECS
+    noteInput();
+#endif
   }
 
   userLedHandler();
@@ -1108,6 +1141,26 @@ void UITask::loop() {
       }
       _display->endFrame();
     }
+#ifdef UI_EINK_IDLE_CLEANUP_SECS
+    // e-ink ghosting cleanup: one full refresh once the buttons have been left alone for a
+    // while (and hourly while idle), instead of a flash in the middle of using the device
+    {
+      unsigned long now = millis();
+      bool idle = now - _last_input_at >= UI_EINK_IDLE_CLEANUP_SECS * 1000UL;
+      if (_display->getPartialRefreshCount() == 0) {
+        // nothing to clean yet: the hourly clock starts at the first partial, and a press that drew nothing is spent
+        if (idle) {
+          _last_cleanup_at = now;
+          _used_since_cleanup = false;
+        }
+      } else if (idle && (_used_since_cleanup || now - _last_cleanup_at >= 60UL * 60 * 1000)) {
+        _display->forceFullRefresh();
+        _next_refresh = 0;
+        _last_cleanup_at = now;
+        _used_since_cleanup = false;
+      }
+    }
+#endif
 #if AUTO_OFF_MILLIS > 0
 #ifdef KEEP_DISPLAY_ON_USB
     // Opt-in: refresh the auto-off deadline while externally powered, so the
@@ -1152,6 +1205,9 @@ char UITask::checkDisplayOn(char c) {
     }
     _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
     _next_refresh = 0;  // trigger refresh
+#ifdef UI_EINK_IDLE_CLEANUP_SECS
+    noteInput();
+#endif
   }
   return c;
 }
