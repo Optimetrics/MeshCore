@@ -43,6 +43,9 @@ bool GxEPDDisplay::begin() {
 #endif
   display.init(115200, true, 2, false);
   display.setRotation(DISPLAY_ROTATION);
+  // no GFX auto-wrap: it would cap every measured width at the panel edge (so long text
+  // "fits") and push overflow onto the next row; printWordWrap() does the wrapping here
+  display.setTextWrap(false);
   setTextSize(1);  // Default to size 1
 
   display.setFullWindow();
@@ -179,9 +182,7 @@ void GxEPDDisplay::print(const char* str) {
 }
 
 int GxEPDDisplay::printWordWrap(const char* str, int max_width) {
-  // wrap at spaces from the current cursor position, stopping at the bottom of the screen.
-  // GFX's own wrapping is off meanwhile: it would cap every measured width at the panel edge
-  display.setTextWrap(false);
+  // wrap at spaces from the current cursor position, stopping at the bottom of the screen
   int x = lroundf(display.getCursorX() / scale_x - offset_x);
   int y = lroundf(display.getCursorY() / scale_y - offset_y);
   int avail = max_width - x;
@@ -216,7 +217,6 @@ int GxEPDDisplay::printWordWrap(const char* str, int max_width) {
     while (*p == ' ') p++;   // a line break swallows the spaces at it
     y += _line_height;
   }
-  display.setTextWrap(true);
   return p - str;
 }
 
