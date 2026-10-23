@@ -15,19 +15,17 @@
 #define VARIANT_MCK (64000000ul)
 
 #define WIRE_INTERFACES_COUNT   (1)
+// P0.21: driven high while running and low for power-off, as the stock firmware does
+// (it calls it SX126X_POWER_EN); on the bench the radio and TCXO work either way
 #define PIN_TXCO                (21)
 ////////////////////////////////////////////////////////////////////////////////
 // Power
 
-#define PIN_PWR_EN              (12)
+#define PIN_PWR_EN              (12)   // rail for e-ink, GPS, flash and sensors
 
 #define BATTERY_PIN             (4)
-#define ADC_MULTIPLIER          (4.90F)
 
 #define ADC_RESOLUTION          (14)
-#define BATTERY_SENSE_RES       (12)
-
-#define AREF_VOLTAGE            (3.0)
 
 ////////////////////////////////////////////////////////////////////////////////
 // Number of pins
@@ -61,18 +59,15 @@
 ////////////////////////////////////////////////////////////////////////////////
 // Builtin LEDs
 
-#define LED_RED                 (38)
-#define LED_GREEN               (36)
-#define LED_BLUE                (14)
+// both active high; the charger also lights the red LED dimly by itself while on USB
+#define LED_RED                 (32 + 4)   // P1.04 (P1.06 is a second drive for the same LED, left alone)
+#define LED_BLUE                (13)       // P0.13, also used as the LoRa TX LED
 
-#define PIN_STATUS_LED          LED_GREEN
-#define LED_BUILTIN             LED_GREEN
-#define PIN_LED                 LED_BUILTIN
-#define LED_PIN                 LED_BUILTIN
-#define LED_STATE_ON            LOW
-
-#define PIN_NEOPIXEL            (14)
-#define NEOPIXEL_NUM            (2)
+#define PIN_STATUS_LED          LED_RED
+#define LED_BUILTIN             (14)       // P0.14, not connected: soaks up the core's flash-write blinks
+#define PIN_LED                 LED_RED
+#define LED_PIN                 LED_RED
+#define LED_STATE_ON            HIGH
 
 ////////////////////////////////////////////////////////////////////////////////
 // Builtin buttons
@@ -96,12 +91,11 @@
 #define SX126X_BUSY             (17)
 #define SX126X_RESET            (25)
 #define SX126X_DIO2_AS_RF_SWITCH
-#define SX126X_DIO3_TCXO_VOLTAGE 1.8
 
 ////////////////////////////////////////////////////////////////////////////////
 // SPI1
 
-#define PIN_SPI1_MISO           (38)
+#define PIN_SPI1_MISO           (38)   // the panel has no MISO; P1.06 only ever becomes an input here
 #define PIN_SPI1_MOSI           (29)
 #define PIN_SPI1_SCK            (31)
 
@@ -142,8 +136,7 @@ extern const int SCK;
 
 #define PIN_GPS_RX              (40)
 #define PIN_GPS_TX              (41)
-#define GPS_EN                  (34)
-#define PIN_GPS_RESET           (37)
-#define PIN_GPS_PPS             (36)
+#define GPS_EN                  (34)   // standby line: high = awake, low = sleep
+#define PIN_GPS_RESET           (37)   // P1.05, L76K reset, active low (not LoRa power)
 #define PIN_GPS_STANDBY         (34)
-#define PIN_GPS_SWITCH          (33)
+#define PIN_GPS_SWITCH          (33)   // P1.01, high when the slide switch is on; the switch cuts GPS power

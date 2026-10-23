@@ -14,23 +14,22 @@ void ThinkNodeM1Board::begin() {
   pinMode(P_LORA_TX_LED, OUTPUT);
   digitalWrite(P_LORA_TX_LED, LOW);
 #endif
-
-  pinMode(SX126X_POWER_EN, OUTPUT);
-  digitalWrite(SX126X_POWER_EN, HIGH);
-  delay(10); // give sx1262 some time to power up
 }
 
 uint16_t ThinkNodeM1Board::getBattMilliVolts() {
-  int adcvalue = 0;
+  uint32_t adcvalue = 0;
 
   analogReference(AR_INTERNAL_3_0);
   analogReadResolution(12);
   delay(10);
 
-  // ADC range is 0..3000mV and resolution is 12-bit (0..4095)
-  adcvalue = analogRead(PIN_VBAT_READ);
+  // ADC range is 0..3000mV and resolution is 12-bit (0..4095);
+  // average a few samples so the reading doesn't jitter
+  for (int i = 0; i < VBAT_SAMPLES; i++) {
+    adcvalue += analogRead(PIN_VBAT_READ);
+  }
   // Convert the raw value to compensated mv, taking the resistor-
   // divider into account (providing the actual LIPO voltage)
-  return (uint16_t)((float)adcvalue * REAL_VBAT_MV_PER_LSB);
+  return (uint16_t)((float)adcvalue / VBAT_SAMPLES * REAL_VBAT_MV_PER_LSB);
 }
 #endif
