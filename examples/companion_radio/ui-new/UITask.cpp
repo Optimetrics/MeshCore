@@ -1003,10 +1003,17 @@ void UITask::loop() {
 #if defined(BACKLIGHT_BTN)
   if (millis() > next_backlight_btn_check) {
     bool touch_state = digitalRead(PIN_BUTTON2);
+#ifdef BACKLIGHT_TIMEOUT_MILLIS
+    // press (active low) starts or extends the timer; light stays on until it runs out
+    if (!touch_state) backlight_off_at = millis() + BACKLIGHT_TIMEOUT_MILLIS;
+    bool light_on = millis() < backlight_off_at;
+#else
+    bool light_on = !touch_state;  // lit only while held
+#endif
 #if defined(DISP_BACKLIGHT)
-    digitalWrite(DISP_BACKLIGHT, !touch_state);
+    digitalWrite(DISP_BACKLIGHT, light_on);
 #elif defined(EXP_PIN_BACKLIGHT)
-    expander.digitalWrite(EXP_PIN_BACKLIGHT, !touch_state);
+    expander.digitalWrite(EXP_PIN_BACKLIGHT, light_on);
 #endif
     next_backlight_btn_check = millis() + 300;
   }
