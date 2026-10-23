@@ -355,6 +355,12 @@ void MyMesh::onContactsFull() {
   }
 }
 
+void MyMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, uint32_t timestamp, const uint8_t* app_data, size_t app_data_len) {
+  // the packet's own SNR, from when it was received: a delay-queued flood is handled after other packets
+  _advert_snr_x4 = (int8_t)(packet->getSNR() * 4);
+  BaseChatMesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len);
+}
+
 void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) {
   if (_serial->isConnected()) {
     if (is_new) {
@@ -385,6 +391,7 @@ void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path
     strcpy(p->name, contact.name);
     p->recv_timestamp = getRTCClock()->getCurrentTime();
     p->path_len = mesh::Packet::copyPath(p->path, path, path_len);
+    p->snr_x4 = _advert_snr_x4;
   }
 
   if (_listener) _listener->onDiscoveredContact(contact, is_new, path_len, path);
