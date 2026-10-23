@@ -26,6 +26,10 @@ public:
     virtual void stop() = 0;
     virtual void loop() = 0;
     virtual bool isEnabled() = 0;
+    // seconds since the last valid fix, or UINT32_MAX if there hasn't been one
+    virtual uint32_t getFixAgeSecs() { return isValid() ? 0 : UINT32_MAX; }
+    // horizontal dilution of precision in tenths (1.1 -> 11), or -1 if unknown
+    virtual int getHDOPx10() { return -1; }
 
     // Format compact diagnostics in the caller-provided buffer. Providers that
     // have more information (for example UART counters) can override this.

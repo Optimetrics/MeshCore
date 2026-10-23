@@ -60,6 +60,11 @@ class MicroNMEALocationProvider : public LocationProvider {
         delay(250);
         MicroNMEA::sendSentence(*_gps_serial, "$PCAS04,7");
         delay(250);
+  #ifdef GPS_L76K_GGA_RMC_ONLY
+        // only the GGA and RMC sentences the parser uses, so less UART traffic to wake for
+        MicroNMEA::sendSentence(*_gps_serial, "$PCAS03,1,0,0,0,1,0,0,0,0,0,,,0,0");
+        delay(250);
+  #endif
     }
 #endif
     // Observation-only diagnostics. These fields do not change GPS power,
@@ -144,6 +149,7 @@ public :
         if (_pin_reset != -1) {
             digitalWrite(_pin_reset, GPS_RESET_ACTIVE);
         }
+        nmea.clear();   // a stopped receiver has no fix; don't keep reporting the last one as valid
         release();
     }
 
@@ -167,6 +173,8 @@ public :
     }
     long satellitesCount() override { return nmea.getNumSatellites(); }
     bool isValid() override { return nmea.isValid(); }
+    uint32_t getFixAgeSecs() override { return _fix_seen ? ageMs(_last_fix_ms) / 1000 : UINT32_MAX; }
+    int getHDOPx10() override { return nmea.isValid() ? nmea.getHDOP() : -1; }
 
     long getTimestamp() override { 
         DateTime dt(nmea.getYear(), nmea.getMonth(),nmea.getDay(),nmea.getHour(),nmea.getMinute(),nmea.getSecond());
