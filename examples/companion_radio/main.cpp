@@ -275,6 +275,12 @@ void setup() {
 #endif
 
   the_mesh.startInterface(interface_manager);
+#if defined(BLE_PIN_CODE) && defined(DISPLAY_CLASS)
+  // stay off if it was turned off before the last reboot, but only when there is a screen to turn it back on from
+  if (disp != NULL && the_mesh.getNodePrefs()->ble_disabled) {
+    interface_manager.disableBluetooth();
+  }
+#endif
   sensors.begin();
 
 #if ENV_INCLUDE_GPS == 1

@@ -587,6 +587,10 @@ public:
       } else {
         _task->enableBluetooth();
       }
+      if (_task->hasDisplay()) {   // headless builds can't see this page, so never make it stick there
+        _node_prefs->ble_disabled = _task->isBluetoothEnabled() ? 0 : 1;
+        the_mesh.savePrefs();   // keep the choice across reboots
+      }
       return true;
     }
 #endif
