@@ -81,7 +81,7 @@
 #define BUTTON_PIN              PIN_BUTTON1
 #define PIN_USER_BTN            BUTTON_PIN
 
-#define PIN_BUTTON2             (11)
+#define PIN_BUTTON2             (32 + 7)   // second side button, active low (P0.11 is the T-Echo touch pad, not wired to a button here)
 #define BUTTON_PIN2             PIN_BUTTON2
 
 #define EXTERNAL_FLASH_DEVICES MX25R1635F
@@ -130,6 +130,12 @@ extern const int SCK;
 #define DISP_RST                (2)
 #define DISP_BUSY               (3)
 #define DISP_BACKLIGHT          (43)
+
+// names used by GxEPDDisplay when EINK_DISPLAY_MODEL is set
+#define PIN_DISPLAY_CS          DISP_CS
+#define PIN_DISPLAY_DC          DISP_DC
+#define PIN_DISPLAY_RST         DISP_RST
+#define PIN_DISPLAY_BUSY        DISP_BUSY
 
 ////////////////////////////////////////////////////////////////////////////////
 // GPS
