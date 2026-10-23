@@ -13,7 +13,12 @@ void ArduinoSerialInterface::disable() {
   _isEnabled = false;
 }
 
-bool ArduinoSerialInterface::isConnected() const { 
+bool ArduinoSerialInterface::isConnected() const {
+#if defined(NRF52_PLATFORM) && defined(USE_TINYUSB)
+  // TinyUSB CDC: a host only counts as connected once it has the port open (DTR set),
+  // which is also when TinyUSB stops dropping our writes
+  if (_serial == &Serial) return Serial.dtr();
+#endif
   return true;   // no way of knowing, so assume yes
 }
 
