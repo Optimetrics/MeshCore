@@ -1,5 +1,10 @@
 
 #include "GxEPDDisplay.h"
+#include "UTF8Transliterate.h"
+
+// the fonts only have ASCII glyphs; translateUTF8ToBlocks() marks anything else with this
+// and print() draws a small box for it
+#define GLYPH_PLACEHOLDER '\x7F'
 
 #ifdef EXP_PIN_BACKLIGHT
   #include <PCA9557.h>
@@ -137,6 +142,8 @@ void GxEPDDisplay::setTextSize(int sz) {
       display.setFont(&FreeSans9pt7b);
       break;
   }
+  const GFXfont* font = (sz == 2) ? &FreeSansBold12pt7b : (sz == 3) ? &FreeSans18pt7b : &FreeSans9pt7b;
+  _line_height = (int)(font->yAdvance * 0.8f / scale_y + 0.5f);
 }
 
 void GxEPDDisplay::setColor(ColorVal c) {
@@ -152,7 +159,69 @@ void GxEPDDisplay::setCursor(int x, int y) {
 
 void GxEPDDisplay::print(const char* str) {
   display_crc.update<char>(str, strlen(str));
-  display.print(str);
+  const char* p = str;
+  while (*p) {
+    const char* box = strchr(p, GLYPH_PLACEHOLDER);
+    if (box == NULL) {
+      display.print(p);
+      break;
+    }
+    display.write((const uint8_t*)p, box - p);
+    // a box the size of a digit, so an emoji or other unsupported character stays visible
+    int16_t bx, by;
+    uint16_t bw, bh;
+    display.getTextBounds("0", 0, 0, &bx, &by, &bw, &bh);
+    int16_t cx = display.getCursorX(), cy = display.getCursorY();
+    display.drawRect(cx + 1, cy + by, bw, bh, _curr_color);
+    display.setCursor(cx + bw + 3, cy);
+    p = box + 1;
+  }
+}
+
+int GxEPDDisplay::printWordWrap(const char* str, int max_width) {
+  // wrap at spaces from the current cursor position, stopping at the bottom of the screen.
+  // GFX's own wrapping is off meanwhile: it would cap every measured width at the panel edge
+  display.setTextWrap(false);
+  int x = lroundf(display.getCursorX() / scale_x - offset_x);
+  int y = lroundf(display.getCursorY() / scale_y - offset_y);
+  int avail = max_width - x;
+  const char* p = str;
+  char line[100];
+  while (*p && (y + offset_y) * scale_y <= display.height() - 2) {
+    int len = 0;
+    while (p[len]) {   // add whole words while they fit
+      int end = len;
+      while (p[end] == ' ') end++;
+      while (p[end] && p[end] != ' ') end++;
+      if (end >= (int)sizeof(line)) break;
+      memcpy(line, p, end);
+      line[end] = 0;
+      if (getTextWidth(line) > avail) break;
+      len = end;
+    }
+    if (len == 0) {   // one word wider than the line: break it mid-word
+      while (p[len] && len < (int)sizeof(line) - 1) {
+        line[len] = p[len];
+        line[len + 1] = 0;
+        if (getTextWidth(line) > avail) break;
+        len++;
+      }
+      if (len == 0) len = 1;   // always make progress
+    }
+    memcpy(line, p, len);
+    line[len] = 0;
+    setCursor(x, y);
+    print(line);
+    p += len;
+    while (*p == ' ') p++;   // a line break swallows the spaces at it
+    y += _line_height;
+  }
+  display.setTextWrap(true);
+  return p - str;
+}
+
+void GxEPDDisplay::translateUTF8ToBlocks(char* dest, const char* src, size_t dest_size) {
+  utf8_to_ascii(dest, src, dest_size, GLYPH_PLACEHOLDER);   // "é" -> "e", emoji -> box
 }
 
 void GxEPDDisplay::fillRect(int x, int y, int w, int h) {
@@ -215,8 +284,25 @@ void GxEPDDisplay::drawXbm(int x, int y, const uint8_t* bits, int w, int h) {
 uint16_t GxEPDDisplay::getTextWidth(const char* str) {
   int16_t x1, y1;
   uint16_t w, h;
-  display.getTextBounds(str, 0, 0, &x1, &y1, &w, &h);
-  return ceil((w + 1) / scale_x);
+  if (strchr(str, GLYPH_PLACEHOLDER) == NULL) {
+    display.getTextBounds(str, 0, 0, &x1, &y1, &w, &h);
+    return ceil((w + 1) / scale_x);
+  }
+  // measure without the placeholders (the font has no glyph for them), then add their boxes
+  char text[256];
+  int n = 0, boxes = 0;
+  for (const char* p = str; *p && n < (int)sizeof(text) - 1; p++) {
+    if (*p == GLYPH_PLACEHOLDER) boxes++;
+    else text[n++] = *p;
+  }
+  text[n] = 0;
+  uint16_t bw = 0;
+  if (n > 0) {
+    display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+    bw = w;
+  }
+  display.getTextBounds("0", 0, 0, &x1, &y1, &w, &h);
+  return ceil((bw + boxes * (w + 3) + 1) / scale_x);
 }
 
 void GxEPDDisplay::endFrame() {
@@ -225,10 +311,12 @@ void GxEPDDisplay::endFrame() {
   if (_full_redraw_pending) {
     display.display(false); // full refresh, rewrites both controller buffers
     _full_redraw_pending = false;
+    _partials_since_full = 0;
     resetPartialRefreshCounter();
   } else if (crc != last_display_crc_value) {
     display.display(true);
     display.powerOff();  // a partial refresh leaves the panel's booster running; nothing needs it until the next frame
+    _partials_since_full++;
     if (_cycles_before_full_refresh > 0) {
       _cycles_before_full_refresh--;
     }

@@ -45,6 +45,8 @@ class GxEPDDisplay : public DisplayDriver {
   int last_display_crc_value = 0;
   int _cycles_before_full_refresh;
   int max_partial_refresh = EINK_MAX_PARTIAL_REFRESH; // so this can be changed by an option after
+  int _partials_since_full = 0;
+  int _line_height = 11;   // virtual units between wrapped lines, set with the font
 
 public:
 #if defined(EINK_DISPLAY_MODEL)
@@ -58,6 +60,7 @@ public:
   bool isOn() override { return _isOn; }
   bool isEink() override { return true; }
   void forceFullRefresh() override { _full_redraw_pending = true; };
+  int getPartialRefreshCount() override { return _partials_since_full; }
   void resetPartialRefreshCounter() { _cycles_before_full_refresh = max_partial_refresh; };
   void turnOn() override;
   void turnOff() override;
@@ -68,6 +71,8 @@ public:
   void setColor(ColorVal c) override;
   void setCursor(int x, int y) override;
   void print(const char* str) override;
+  int printWordWrap(const char* str, int max_width) override;
+  void translateUTF8ToBlocks(char* dest, const char* src, size_t dest_size) override;
   void fillRect(int x, int y, int w, int h) override;
   void drawRect(int x, int y, int w, int h) override;
   void drawXbm(int x, int y, const uint8_t* bits, int w, int h) override;
