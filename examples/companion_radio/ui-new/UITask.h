@@ -75,6 +75,10 @@ class UITask : public AbstractUITask {
   uint8_t low_batt_readings = 0;
 #endif
   bool _shutting_down = false;
+#if ENV_INCLUDE_GPS == 1
+  int8_t _gps_switch_seen = -1;     // last GPS switch position seen, -1 before the first look
+  unsigned long _gps_switch_checked_at = 0;
+#endif
 #ifdef UI_EINK_IDLE_CLEANUP_SECS
   unsigned long _last_input_at = 0, _last_cleanup_at = 0;
   bool _used_since_cleanup = false;
@@ -127,6 +131,7 @@ public:
   void toggleBuzzer();
   bool getGPSState();
   void toggleGPS();
+  const char* getSensorSetting(const char* name);   // NULL if the sensor manager has no such setting
 
   // MyMesh::Listener
   void onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t txt_type, uint32_t sender_timestamp, const char* text) override;

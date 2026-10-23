@@ -110,6 +110,9 @@ class HomeScreen : public UIScreen {
 #if ENV_INCLUDE_GPS == 1
     GPS,
 #endif
+#if ENV_INCLUDE_GPS == 1 && defined(UI_TRACK_PAGE)
+    TRACK,
+#endif
 #if UI_SENSORS_PAGE == 1
     SENSORS,
 #endif
@@ -136,6 +139,81 @@ class HomeScreen : public UIScreen {
   uint32_t disc_nodes_count = 0;
   uint32_t discovery_req_time = 0;
   bool discovery_disp_names = true; // by default desplay names if available (removes SNR_O)
+#endif
+
+#if ENV_INCLUDE_GPS == 1 && defined(UI_TRACK_PAGE)
+  static double distanceMeters(double lat1, double lon1, double lat2, double lon2) {
+    const double r = 6371000.0, d2r = M_PI / 180.0;
+    double dlat = (lat2 - lat1) * d2r, dlon = (lon2 - lon1) * d2r;
+    double a = sin(dlat / 2) * sin(dlat / 2) + cos(lat1 * d2r) * cos(lat2 * d2r) * sin(dlon / 2) * sin(dlon / 2);
+    if (a > 1) a = 1;   // rounding at the antipode
+    return 2 * r * atan2(sqrt(a), sqrt(1 - a));
+  }
+
+  // 8-point bearing from 1 to 2, north-up (there's no compass, so not relative to where we face)
+  static const char* compassPoint(double lat1, double lon1, double lat2, double lon2) {
+    const double d2r = M_PI / 180.0;
+    double y = sin((lon2 - lon1) * d2r) * cos(lat2 * d2r);
+    double x = cos(lat1 * d2r) * sin(lat2 * d2r) - sin(lat1 * d2r) * cos(lat2 * d2r) * cos((lon2 - lon1) * d2r);
+    double brg = atan2(y, x) / d2r;
+    if (brg < 0) brg += 360;
+    static const char* points[] = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
+    return points[(int)((brg + 22.5) / 45) % 8];
+  }
+
+  // the three most recently heard favourites that share a position: how far, which way, when last heard
+  void renderTracking(DisplayDriver& display) {
+    display.setTextSize(1);
+    display.setColor(UIColor::secondary_txt);
+    display.drawTextLeftAlign(0, 18, "favourites");
+
+    ContactInfo best[3], c;
+    int n = 0;
+    int first = the_mesh.getTotalContactSlots() - the_mesh.getNumContacts();   // skip the anonymous slots
+    for (int i = first; i < the_mesh.getTotalContactSlots(); i++) {
+      if (!the_mesh.getContactByIdx(i, c) || !c.isFav() || (c.gps_lat == 0 && c.gps_lon == 0)) continue;
+      int pos = n;
+      while (pos > 0 && best[pos - 1].lastmod < c.lastmod) pos--;   // lastmod is our clock, not theirs
+      if (pos >= 3) continue;
+      for (int k = (n < 3 ? n : 2); k > pos; k--) best[k] = best[k - 1];
+      best[pos] = c;
+      if (n < 3) n++;
+    }
+
+    display.setColor(UIColor::primary_txt);
+    if (n == 0) {
+      display.drawTextLeftAlign(0, 32, "No favourites with");
+      display.drawTextLeftAlign(0, 43, "a shared position");
+      return;
+    }
+    bool have_pos = sensors.node_lat != 0 || sensors.node_lon != 0;
+    char tmp[32], age[8], filtered[sizeof(c.name)];
+    int y = 31;
+    for (int i = 0; i < n; i++, y += 24) {
+      int secs = (int)(_rtc->getCurrentTime() - best[i].lastmod);
+      formatAge(age, secs < 0 ? 0 : secs, display.isEink());
+      int age_w = display.getTextWidth(age);
+      display.translateUTF8ToBlocks(filtered, best[i].name, sizeof(filtered));
+      display.setColor(UIColor::primary_txt);
+      display.drawTextEllipsized(0, y, display.width() - age_w - 4, filtered);
+      display.setColor(UIColor::secondary_txt);
+      display.setCursor(display.width() - age_w - 1, y);
+      display.print(age);
+
+      if (!have_pos) {
+        strcpy(tmp, "no own position");
+      } else {
+        double lat = best[i].gps_lat / 1000000.0, lon = best[i].gps_lon / 1000000.0;
+        double d = distanceMeters(sensors.node_lat, sensors.node_lon, lat, lon);
+        const char* dir = compassPoint(sensors.node_lat, sensors.node_lon, lat, lon);
+        if (d < 1000) sprintf(tmp, "%d m %s", (int)d, dir);
+        else if (d < 100000) sprintf(tmp, "%.1f km %s", d / 1000, dir);
+        else sprintf(tmp, "%d km %s", (int)(d / 1000), dir);
+      }
+      display.setColor(UIColor::primary_txt);
+      display.drawTextLeftAlign(8, y + 11, tmp);
+    }
+  }
 #endif
 
   void renderBatteryIndicator(DisplayDriver& display, uint16_t batteryMilliVolts) {
@@ -423,16 +501,24 @@ public:
       char buf[50];
       int y = 18;
       bool gps_state = _task->getGPSState();
-#ifdef PIN_GPS_SWITCH
-      bool hw_gps_state = digitalRead(PIN_GPS_SWITCH);
-      if (gps_state != hw_gps_state) {
-        strcpy(buf, gps_state ? "gps off(hw)" : "gps off(sw)");
+      const char* sw = _task->getSensorSetting("gps_switch");   // boards that report their GPS switch
+      if (sw != NULL) {
+        if (sw[0] == '0') strcpy(buf, "gps off (switch)");
+        else if (!gps_state) strcpy(buf, "gps off");
+        else if (nmea != NULL && !nmea->isEnabled()) strcpy(buf, "gps asleep");   // between fixes
+        else strcpy(buf, "gps on");
       } else {
-        strcpy(buf, gps_state ? "gps on" : "gps off");
-      }
+#ifdef PIN_GPS_SWITCH
+        bool hw_gps_state = digitalRead(PIN_GPS_SWITCH);
+        if (gps_state != hw_gps_state) {
+          strcpy(buf, gps_state ? "gps off(hw)" : "gps off(sw)");
+        } else {
+          strcpy(buf, gps_state ? "gps on" : "gps off");
+        }
 #else
-      strcpy(buf, gps_state ? "gps on" : "gps off");
+        strcpy(buf, gps_state ? "gps on" : "gps off");
 #endif
+      }
       display.setColor(UIColor::primary_txt);
       display.drawTextLeftAlign(0, y, buf);
       if (nmea == NULL) {
@@ -440,30 +526,56 @@ public:
         display.setColor(UIColor::secondary_txt);
         display.drawTextLeftAlign(0, y, "Can't access GPS");
       } else {
+        // fix freshness: "fix" while current, otherwise how long ago the last one was
+        uint32_t fix_age = nmea->getFixAgeSecs();
+        bool fresh = nmea->isValid() && fix_age <= 5;
+        if (fresh) {
+          strcpy(buf, "fix");
+        } else if (fix_age == UINT32_MAX) {
+          strcpy(buf, "no fix");
+        } else {
+          char age[8];
+          formatAge(age, fix_age, display.isEink());
+          sprintf(buf, "fix %s", age);
+        }
         display.setColor(UIColor::primary_txt);
-        strcpy(buf, nmea->isValid()?"fix":"no fix");
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
         display.setColor(UIColor::secondary_txt);
         display.drawTextLeftAlign(0, y, "sat");
         display.setColor(UIColor::primary_txt);
-        sprintf(buf, "%d", nmea->satellitesCount());
+        int hdop = nmea->getHDOPx10();
+        if (hdop >= 0 && hdop < 255 && display.height() > 64) {
+          sprintf(buf, "%d  hdop %d.%d", (int)nmea->satellitesCount(), hdop / 10, hdop % 10);
+        } else {
+          sprintf(buf, "%d", (int)nmea->satellitesCount());
+        }
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
+        // the live fix if there is one, else the last known position
+        double lat = nmea->getLatitude()/1000000., lon = nmea->getLongitude()/1000000.;
+        if (!fresh) {
+          lat = sensors.node_lat;
+          lon = sensors.node_lon;
+        }
         display.setColor(UIColor::secondary_txt);
-        display.drawTextLeftAlign(0, y, "pos");
+        display.drawTextLeftAlign(0, y, "pos");   // the first line already says how old the fix is
         display.setColor(UIColor::primary_txt);
-        sprintf(buf, "%.4f %.4f",
-          nmea->getLatitude()/1000000., nmea->getLongitude()/1000000.);
+        if (lat == 0 && lon == 0) strcpy(buf, "-");
+        else sprintf(buf, "%.4f %.4f", lat, lon);
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
         display.setColor(UIColor::secondary_txt);
         display.drawTextLeftAlign(0, y, "alt");
         display.setColor(UIColor::primary_txt);
-        sprintf(buf, "%.2f", nmea->getAltitude()/1000.);
+        sprintf(buf, "%.2f", fresh ? nmea->getAltitude()/1000. : sensors.node_altitude);
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
       }
+#endif
+#if ENV_INCLUDE_GPS == 1 && defined(UI_TRACK_PAGE)
+    } else if (_page == HomePage::TRACK) {
+      renderTracking(display);
 #endif
 #if UI_SENSORS_PAGE == 1
     } else if (_page == HomePage::SENSORS) {
@@ -587,6 +699,9 @@ public:
       }
 #endif
     }
+#if ENV_INCLUDE_GPS == 1 && defined(UI_TRACK_PAGE)
+    if (_page == HomePage::TRACK) return 30000;   // positions only change with adverts
+#endif
     return 5000;   // next render after 5000 ms
   }
 
@@ -1114,6 +1229,32 @@ void UITask::loop() {
 #endif
   }
 
+#if ENV_INCLUDE_GPS == 1
+  // a hardware GPS switch (where the board reports one) is the master: keep the saved
+  // setting in step with it, and confirm each flip
+  if (millis() - _gps_switch_checked_at >= 500) {
+    _gps_switch_checked_at = millis();
+    const char* sw = getSensorSetting("gps_switch");
+    if (sw != NULL) {
+      int8_t on = sw[0] == '1';
+      if (on != _gps_switch_seen) {
+        bool first_look = _gps_switch_seen < 0;
+        _gps_switch_seen = on;
+        _sensors->setSettingValue("gps", on ? "1" : "0");   // so a flip the board's own poll missed still takes
+        if (_node_prefs->gps_enabled != on) {
+          _node_prefs->gps_enabled = on;
+          the_mesh.savePrefs();
+        }
+        if (!first_look) {
+          notify(UIEventType::ack);
+          showAlert(on ? "GPS on" : "GPS off", 800);
+          _next_refresh = 0;   // draw it now
+        }
+      }
+    }
+  }
+#endif
+
   userLedHandler();
 
 #ifdef PIN_BUZZER
@@ -1235,15 +1376,20 @@ char UITask::handleTripleClick(char c) {
 }
 
 bool UITask::getGPSState() {
+  const char* v = getSensorSetting("gps");
+  return v != NULL && strcmp(v, "1") == 0;
+}
+
+const char* UITask::getSensorSetting(const char* name) {
   if (_sensors != NULL) {
     int num = _sensors->getNumSettings();
     for (int i = 0; i < num; i++) {
-      if (strcmp(_sensors->getSettingName(i), "gps") == 0) {
-        return !strcmp(_sensors->getSettingValue(i), "1");
+      if (strcmp(_sensors->getSettingName(i), name) == 0) {
+        return _sensors->getSettingValue(i);
       }
     }
   }
-  return false;
+  return NULL;
 }
 
 void UITask::toggleGPS() {
@@ -1256,10 +1402,13 @@ void UITask::toggleGPS() {
           _sensors->setSettingValue("gps", "0");
           _node_prefs->gps_enabled = 0;
           notify(UIEventType::ack);
-        } else {
-          _sensors->setSettingValue("gps", "1");
+        } else if (_sensors->setSettingValue("gps", "1")) {
           _node_prefs->gps_enabled = 1;
           notify(UIEventType::ack);
+        } else {   // e.g. a hardware GPS switch that is off
+          showAlert("GPS switch is off", 1000);
+          _next_refresh = 0;
+          break;
         }
         the_mesh.savePrefs();
         showAlert(_node_prefs->gps_enabled ? "GPS: Enabled" : "GPS: Disabled", 800);
