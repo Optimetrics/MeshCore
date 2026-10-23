@@ -133,11 +133,25 @@ class HomeScreen : public UIScreen {
 #ifndef BATT_MAX_MILLIVOLTS
   #define BATT_MAX_MILLIVOLTS 4200
 #endif
+#ifdef UI_BATT_LIPO_CURVE
+    // a LiPo sits around 3.7-3.9 V for most of its charge, so map through its
+    // resting-voltage curve (10% steps) rather than a straight line
+    static const uint16_t lipo_mv[] = { 3300, 3690, 3730, 3770, 3800, 3840, 3870, 3950, 4020, 4110, 4190 };
+    int batteryPercentage = 100;
+    for (int i = 0; i < 10; i++) {
+      if (batteryMilliVolts < lipo_mv[i + 1]) {
+        batteryPercentage = batteryMilliVolts <= lipo_mv[i] ? i * 10
+            : i * 10 + (batteryMilliVolts - lipo_mv[i]) * 10 / (lipo_mv[i + 1] - lipo_mv[i]);
+        break;
+      }
+    }
+#else
     const int minMilliVolts = BATT_MIN_MILLIVOLTS;
     const int maxMilliVolts = BATT_MAX_MILLIVOLTS;
     int batteryPercentage = ((batteryMilliVolts - minMilliVolts) * 100) / (maxMilliVolts - minMilliVolts);
     if (batteryPercentage < 0) batteryPercentage = 0; // Clamp to 0%
     if (batteryPercentage > 100) batteryPercentage = 100; // Clamp to 100%
+#endif
 
     // battery icon
     int iconWidth = 24;
@@ -762,6 +776,10 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #endif
 
   ui_started_at = millis();
+#if defined(UI_WAKE_ON_BUTTON) && defined(PIN_USER_BTN)
+  // the press that woke us is still held: don't let it count as the CLI rescue long-press
+  if (user_btn.isPressed()) ui_started_at = millis() - 8000;
+#endif
   _alert_expiry = 0;
 
   splash = new SplashScreen(this);
@@ -870,8 +888,9 @@ void UITask::onControlDataRecv(const mesh::Packet* packet) {
 
 void UITask::userLedHandler() {
 #ifdef PIN_STATUS_LED
-  int cur_time = millis();
-  if (cur_time > next_led_change) {
+  unsigned long cur_time = millis();
+  if (cur_time - led_changed_at >= led_phase_millis) {   // rollover-safe
+    led_changed_at = cur_time;
     if (led_state == 0) {
       led_state = 1;
       if (_msgcount > 0) {
@@ -879,12 +898,17 @@ void UITask::userLedHandler() {
       } else {
         last_led_increment = LED_ON_MILLIS;
       }
-      next_led_change = cur_time + last_led_increment;
+      led_phase_millis = last_led_increment;
     } else {
       led_state = 0;
-      next_led_change = cur_time + LED_CYCLE_MILLIS - last_led_increment;
+      led_phase_millis = LED_CYCLE_MILLIS - last_led_increment;
     }
-    digitalWrite(PIN_STATUS_LED, led_state == LED_STATE_ON);
+  #ifdef UI_STATUS_LED_UNREAD_ONLY
+    bool lit = led_state == 1 && _msgcount > 0;   // dark unless messages are waiting
+  #else
+    bool lit = led_state == 1;
+  #endif
+    digitalWrite(PIN_STATUS_LED, lit ? LED_STATE_ON : !LED_STATE_ON);
   }
 #endif
 }
@@ -897,7 +921,10 @@ void UITask::setCurrScreen(UIScreen* c) {
 /*
   hardware-agnostic pre-shutdown activity should be done here
 */
-void UITask::shutdown(bool restart){
+void UITask::shutdown(bool restart, bool low_battery){
+  if (_shutting_down) return;   // one shot: the hibernate page polls this until the board is off
+  _shutting_down = true;
+  the_mesh.flushPendingWrites();   // don't lose a contact change still waiting on its lazy save
 
   #ifdef PIN_BUZZER
   /* note: we have a choice here -
@@ -915,11 +942,35 @@ void UITask::shutdown(bool restart){
   if (restart) {
     _board->reboot();
   } else {
-    display.forceFullRefresh();
-    display.clear();
-    display.endFrame();
+    // leave a final screen up: an e-ink panel keeps it with the power off
+    if (_display != NULL) {
+      if (!_display->isOn()) _display->turnOn();   // a frame drawn while off is never shown
+      _display->forceFullRefresh();
+      _display->startFrame();
+      _display->setColor(UIColor::primary_txt);
+      _display->setTextSize(1);
+      char filtered_name[sizeof(_node_prefs->node_name)];
+      _display->translateUTF8ToBlocks(filtered_name, _node_prefs->node_name, sizeof(filtered_name));
+      _display->drawTextCentered(_display->width() / 2, 2, filtered_name);
+      _display->setTextSize(2);
+      _display->setColor(low_battery ? UIColor::warning_txt : UIColor::primary_txt);
+      _display->drawTextCentered(_display->width() / 2, 20, low_battery ? "Battery low" : "Powered off");
+      _display->setTextSize(1);
+      _display->setColor(UIColor::secondary_txt);
+    #ifdef UI_WAKE_ON_BUTTON   // the board arms its buttons to wake it from power-off
+      _display->drawTextCentered(_display->width() / 2, 40, low_battery ? "charge it, then" : "press a button");
+      _display->drawTextCentered(_display->width() / 2, 52, low_battery ? "press a button" : "to wake");
+    #else
+      if (low_battery) _display->drawTextCentered(_display->width() / 2, 40, "charge it");
+    #endif
+      _display->endFrame();
+      if (low_battery && !_display->isEink()) delay(3000);   // a lit display goes dark below, so give time to read it
+      _display->turnOffKeepImage();
+    }
+
     // Power off board including radio, display, GPS and components
     _board->powerOff();
+    _board->reboot();   // System OFF didn't take; restart rather than keep running half shut down
   }
 }
 
@@ -1080,19 +1131,13 @@ void UITask::loop() {
 #ifdef AUTO_SHUTDOWN_MILLIVOLTS
   if (millis() > next_batt_chck) {
     uint16_t milliVolts = getBattMilliVolts();
-    if (milliVolts > 0 && milliVolts < AUTO_SHUTDOWN_MILLIVOLTS) {
-      if(!board.isExternalPowered()) {
-        if (_display != NULL) {
-          _display->startFrame();
-          _display->setTextSize(2);
-          _display->setColor(UIColor::warning_txt);
-          _display->drawTextCentered(_display->width() / 2, 20, "Low Battery.");
-          _display->drawTextCentered(_display->width() / 2, 40, "Shutting Down!");
-          _display->endFrame();
-          if (_display->isEink() == false) { delay(3000); }
-        }
-        shutdown();
+    if (milliVolts > 0 && milliVolts < AUTO_SHUTDOWN_MILLIVOLTS && !board.isExternalPowered()) {
+      // a TX burst can sag the cell for a moment, so only act on three low readings in a row
+      if (++low_batt_readings >= 3) {
+        shutdown(false, true);
       }
+    } else {
+      low_batt_readings = 0;
     }
     next_batt_chck = millis() + 8000;
   }

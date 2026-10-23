@@ -67,9 +67,14 @@ class UITask : public AbstractUITask {
 #endif
 #ifdef PIN_STATUS_LED
   int led_state = 0;
-  int next_led_change = 0;
+  unsigned long led_changed_at = 0;
+  unsigned long led_phase_millis = 0;
   int last_led_increment = 0;
 #endif
+#ifdef AUTO_SHUTDOWN_MILLIVOLTS
+  uint8_t low_batt_readings = 0;
+#endif
+  bool _shutting_down = false;
 
 #ifdef PIN_USER_BTN_ANA
   unsigned long _analogue_pin_read_millis = millis();
@@ -128,5 +133,5 @@ public:
   void notify(UIEventType t = UIEventType::none) override;
   void loop() override;
 
-  void shutdown(bool restart = false);
+  void shutdown(bool restart = false, bool low_battery = false);
 };
