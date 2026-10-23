@@ -153,7 +153,20 @@ void setup() {
   }
 #endif
 
-  if (!radio_init()) { halt(); }
+  if (!radio_init()) {
+#ifdef DISPLAY_CLASS
+    if (disp != NULL) {   // say why it stopped instead of sitting on "Loading..."
+      disp->startFrame();
+      disp->setTextSize(1);
+      disp->setColor(UIColor::warning_txt);
+      disp->drawTextCentered(disp->width() / 2, 20, "Radio failed to start");
+      disp->setColor(UIColor::secondary_txt);
+      disp->drawTextCentered(disp->width() / 2, 34, "restart to try again");
+      disp->endFrame();
+    }
+#endif
+    halt();
+  }
 
   fast_rng.begin(radio_driver.getRngSeed());
 
