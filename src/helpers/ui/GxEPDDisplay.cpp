@@ -94,6 +94,16 @@ void GxEPDDisplay::turnOff() {
   display.hibernate();
 }
 
+void GxEPDDisplay::turnOffKeepImage() {
+#if defined(DISP_BACKLIGHT) && !defined(BACKLIGHT_BTN)
+  digitalWrite(DISP_BACKLIGHT, LOW);
+#elif defined(EXP_PIN_BACKLIGHT) && !defined(BACKLIGHT_BTN)
+  expander.digitalWrite(EXP_PIN_BACKLIGHT, LOW);
+#endif
+  _isOn = false;
+  display.hibernate();  // e-ink holds the last frame with no power
+}
+
 void GxEPDDisplay::clear() {
   display.fillScreen(GxEPD_WHITE);
   display.setTextColor(GxEPD_BLACK);
@@ -218,6 +228,7 @@ void GxEPDDisplay::endFrame() {
     resetPartialRefreshCounter();
   } else if (crc != last_display_crc_value) {
     display.display(true);
+    display.powerOff();  // a partial refresh leaves the panel's booster running; nothing needs it until the next frame
     if (_cycles_before_full_refresh > 0) {
       _cycles_before_full_refresh--;
     }

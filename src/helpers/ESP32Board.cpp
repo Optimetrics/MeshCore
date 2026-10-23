@@ -52,7 +52,7 @@ void ESP32Board::powerOff() {
 void ESP32Board::enterDeepSleep(uint32_t secs) {
   // Power off the display if any
 #ifdef DISPLAY_CLASS
-  display.turnOff();
+  if (display.isOn()) display.turnOff();   // keep a frame left by turnOffKeepImage()
 #endif
 
   // Power off LoRa
