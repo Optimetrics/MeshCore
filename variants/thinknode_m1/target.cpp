@@ -16,7 +16,7 @@ ThinkNodeM1SensorManager sensors = ThinkNodeM1SensorManager(nmea);
 
 #ifdef DISPLAY_CLASS
   DISPLAY_CLASS display;
-  MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
+  MomentaryButton user_btn(PIN_USER_BTN, 1000, true, true);   // no external pull-up on the M1 buttons
 #endif
 
 bool radio_init() {
@@ -30,8 +30,10 @@ mesh::LocalIdentity radio_new_identity() {
 }
 
 void ThinkNodeM1SensorManager::start_gps() {
-  if (!gps_active) {
+  // the slide switch cuts GPS power: never drive its UART or control lines into an unpowered L76K
+  if (!gps_active && digitalRead(PIN_GPS_SWITCH) == HIGH) {
     gps_active = true;
+    Serial1.begin(9600);
     _location->begin();
   }
 }
@@ -40,12 +42,12 @@ void ThinkNodeM1SensorManager::stop_gps() {
   if (gps_active) {
     gps_active = false;
     _location->stop();
+    Serial1.end();
+    nrf_gpio_cfg_default(PIN_SERIAL1_TX);   // stop the idle-high TX line back-feeding the GPS
   }
 }
 
 bool ThinkNodeM1SensorManager::begin() {
-  Serial1.begin(9600);
-
   // Initialize GPS switch pin
   pinMode(PIN_GPS_SWITCH, INPUT);
   last_gps_switch_state = digitalRead(PIN_GPS_SWITCH);
