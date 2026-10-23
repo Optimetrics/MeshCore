@@ -17,6 +17,9 @@ ThinkNodeM1SensorManager sensors = ThinkNodeM1SensorManager(nmea);
 #ifdef DISPLAY_CLASS
   DISPLAY_CLASS display;
   MomentaryButton user_btn(PIN_USER_BTN, 1000, true, true);   // no external pull-up on the M1 buttons
+  #ifdef UI_ENTER_BTN
+  MomentaryButton enter_btn(UI_ENTER_BTN, 1000, true, true, false);   // single clicks only, so they act at once
+  #endif
 #endif
 
 bool radio_init() {
