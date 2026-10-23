@@ -26,6 +26,19 @@ static void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
 void NRF52Board::begin() {
   startup_reason = BD_STARTUP_NORMAL;
 
+#ifdef NRF52_WATCHDOG_SECS
+  // hardware watchdog: reboots the board if the main loop stops running (a stalled USB
+  // host, a lockup). It can't be stopped once started, survives a soft reset, and the
+  // bootloader keeps feeding it during DFU.
+  if (!(NRF_WDT->RUNSTATUS & WDT_RUNSTATUS_RUNSTATUS_Msk)) {
+    NRF_WDT->CONFIG = (WDT_CONFIG_HALT_Pause << WDT_CONFIG_HALT_Pos) | (WDT_CONFIG_SLEEP_Run << WDT_CONFIG_SLEEP_Pos);
+    NRF_WDT->CRV = NRF52_WATCHDOG_SECS * 32768UL - 1;
+    NRF_WDT->RREN = WDT_RREN_RR0_Msk;
+    NRF_WDT->TASKS_START = 1;
+  }
+  NRF_WDT->RR[0] = WDT_RR_RR_Reload;
+#endif
+
   #ifdef USE_CC310_HW_CRYPTO
     // CC310 TRNG is higher quality and environment-independent vs radio RSSI noise.
     nRFCrypto.begin();
