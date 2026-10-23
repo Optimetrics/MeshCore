@@ -140,3 +140,6 @@ extern const int SCK;
 #define PIN_GPS_RESET           (37)   // P1.05, L76K reset, active low (not LoRa power)
 #define PIN_GPS_STANDBY         (34)
 #define PIN_GPS_SWITCH          (33)   // P1.01, high when the slide switch is on; the switch cuts GPS power
+
+#define GPS_L76K                       // CASIC AT6558R core: set up GPS + BeiDou + GLONASS at power-up
+#define GPS_L76K_GGA_RMC_ONLY          // and only the two sentences the parser uses

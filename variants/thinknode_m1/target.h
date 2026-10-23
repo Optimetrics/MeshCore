@@ -14,12 +14,20 @@
 #endif
 
 class ThinkNodeM1SensorManager : public SensorManager {
-  bool gps_active = false;
+  bool gps_active = false;          // switched on: awake, or asleep between fixes
+  bool gps_awake = false;
   bool last_gps_switch_state = false;
+  uint32_t gps_interval_secs = 0;   // from the app: sleep between fixes, 0 = run continuously
+  unsigned long awake_since = 0, fix_at = 0, wake_at = 0;
+  mutable char interval_str[12];
   LocationProvider* _location;
 
   void start_gps();
   void stop_gps();
+  void wake_gps();
+  void sleep_gps();
+  void scheduleWake();
+  bool dutyCycling() const;
 public:
   ThinkNodeM1SensorManager(LocationProvider &location): _location(&location) { }
   LocationProvider* getLocationProvider() override { return _location; }
@@ -44,4 +52,3 @@ extern ThinkNodeM1SensorManager sensors;
 
 bool radio_init();
 mesh::LocalIdentity radio_new_identity();
-
