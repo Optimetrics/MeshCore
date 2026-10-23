@@ -53,6 +53,7 @@ bool GxEPDDisplay::begin() {
 
   display.setPartialWindow(0, 0, display.width(), display.height());
   resetPartialRefreshCounter();
+  _full_redraw_pending = true; // first frame after power-on is a full refresh
 
   #if DISP_BACKLIGHT
   digitalWrite(DISP_BACKLIGHT, LOW);
@@ -72,6 +73,8 @@ void GxEPDDisplay::turnOn() {
 #endif
   if (!_isOn) {
     _isOn = true;
+    // waking from hibernate: redraw the whole screen with a full refresh to clear ghosting
+    _full_redraw_pending = true;
   }
 }
 
@@ -101,15 +104,10 @@ void GxEPDDisplay::startFrame(ColorVal bkg) {
   display.fillScreen(bkg);
   display.setTextColor(_curr_color = UIColor::primary_txt);
   display_crc.reset();
-  if (_cycles_before_full_refresh != 0) {
-    display.setPartialWindow(0, 0, display.width(), display.height());
-  } else {
-    // forces a full wipe of the screen ...
-    display.clearScreen(0xFF); // Clears microcontroller side RAM
-    display.writeScreenBuffer(0xFF); // Forces 0xFF (White) into the display controller's history registers
-    // we'll need a partial refresh after that (whatever crc value is)
-    last_display_crc_value = 0;
-    resetPartialRefreshCounter();
+  display.setPartialWindow(0, 0, display.width(), display.height());
+  if (_cycles_before_full_refresh == 0) {
+    // partial refresh budget used up, redraw this frame with a full refresh to clear ghosting
+    _full_redraw_pending = true;
   }
 }
 
@@ -214,7 +212,11 @@ uint16_t GxEPDDisplay::getTextWidth(const char* str) {
 void GxEPDDisplay::endFrame() {
   if (_isOn == false) return;
   uint32_t crc = display_crc.finalize();
-  if (crc != last_display_crc_value) {
+  if (_full_redraw_pending) {
+    display.display(false); // full refresh, rewrites both controller buffers
+    _full_redraw_pending = false;
+    resetPartialRefreshCounter();
+  } else if (crc != last_display_crc_value) {
     display.display(true);
     if (_cycles_before_full_refresh > 0) {
       _cycles_before_full_refresh--;

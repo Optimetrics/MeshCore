@@ -39,6 +39,7 @@ class GxEPDDisplay : public DisplayDriver {
 #endif
   bool _init = false;
   bool _isOn = false;
+  bool _full_redraw_pending = false; // next endFrame does a full refresh of the whole screen
   uint16_t _curr_color;
   CRC32 display_crc;
   int last_display_crc_value = 0;
@@ -56,7 +57,7 @@ public:
 
   bool isOn() override { return _isOn; }
   bool isEink() override { return true; }
-  void forceFullRefresh() override { _cycles_before_full_refresh = 0; };
+  void forceFullRefresh() override { _full_redraw_pending = true; };
   void resetPartialRefreshCounter() { _cycles_before_full_refresh = max_partial_refresh; };
   void turnOn() override;
   void turnOff() override;
