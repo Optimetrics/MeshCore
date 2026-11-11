@@ -10,6 +10,11 @@
 
 #define NUM_NOISE_FLOOR_SAMPLES  64
 #define SAMPLING_THRESHOLD  14
+// The instantaneous RSSI reads far too low for a short while after the radio (re)enters
+// receive, so leave it alone at first, and spread a round of samples over time instead of
+// taking them on consecutive loop passes (which can all land inside that window).
+#define NOISE_FLOOR_RX_SETTLE_MS      30
+#define NOISE_FLOOR_SAMPLE_INTERVAL_MS 25
 
 static volatile uint8_t state = STATE_IDLE;
 
@@ -41,6 +46,7 @@ void RadioLibWrapper::begin() {
   // start average out some samples
   _num_floor_samples = 0;
   _floor_sample_sum = 0;
+  _floor_rejects = 0;
 }
 
 uint32_t RadioLibWrapper::getRngSeed() {
@@ -52,6 +58,11 @@ void RadioLibWrapper::setTxPower(int8_t dbm) {
   idle();
 #endif
   _radio->setOutputPower(dbm);
+}
+
+void RadioLibWrapper::enteredRx() {
+  state = STATE_RX;
+  _rx_started_ms = millis();
 }
 
 void RadioLibWrapper::idle() {
@@ -85,15 +96,27 @@ void RadioLibWrapper::resetAGC() {
   _noise_floor = 0;
   _num_floor_samples = 0;
   _floor_sample_sum = 0;
+  _floor_rejects = 0;
 }
 
 void RadioLibWrapper::loop() {
   if (state == STATE_RX && _num_floor_samples < NUM_NOISE_FLOOR_SAMPLES) {
-    if (!isReceivingPacket()) {
-      int rssi = getCurrentRSSI();
-      if (rssi < _noise_floor + SAMPLING_THRESHOLD) {  // only consider samples below current floor + sampling THRESHOLD
-        _num_floor_samples++;
-        _floor_sample_sum += rssi;
+    uint32_t now = millis();
+    if (now - _rx_started_ms >= NOISE_FLOOR_RX_SETTLE_MS && now - _last_floor_sample_ms >= NOISE_FLOOR_SAMPLE_INTERVAL_MS) {
+      _last_floor_sample_ms = now;
+      if (!isReceivingPacket()) {
+        int rssi = getCurrentRSSI();
+        if (rssi < _noise_floor + SAMPLING_THRESHOLD) {  // only consider samples below current floor + sampling THRESHOLD
+          _num_floor_samples++;
+          _floor_sample_sum += rssi;
+        } else if (++_floor_rejects >= NUM_NOISE_FLOOR_SAMPLES) {
+          // A whole round's worth turned away before one round could complete: the floor
+          // estimate is too low for what the receiver sees now. Start over and accept anything.
+          _noise_floor = 0;
+          _num_floor_samples = 0;
+          _floor_sample_sum = 0;
+          _floor_rejects = 0;
+        }
       }
     }
   } else if (_num_floor_samples >= NUM_NOISE_FLOOR_SAMPLES && _floor_sample_sum != 0) {
@@ -102,6 +125,7 @@ void RadioLibWrapper::loop() {
       _noise_floor = -120;    // clamp to lower bound of -120dBi
     }
     _floor_sample_sum = 0;
+    _floor_rejects = 0;
 
     #ifdef MESH_DEBUG_NOISE_FLOOR
     MESH_DEBUG_PRINTLN("RadioLibWrapper: noise_floor = %d", (int)_noise_floor);
@@ -115,7 +139,7 @@ void RadioLibWrapper::startRecv() {
   #endif
   int err = _radio->startReceive();
   if (err == RADIOLIB_ERR_NONE) {
-    state = STATE_RX;
+    enteredRx();
   } else {
     MESH_DEBUG_PRINTLN("RadioLibWrapper: error: startReceive(%d)", err);
   }
@@ -145,7 +169,7 @@ int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
       }
     }
     #if defined(USE_LR2021)
-    state = STATE_RX;     // LR2021 stays in Rx after readData, calling startReceive while still in Rx throws -706 errors
+    enteredRx();     // LR2021 stays in Rx after readData, calling startReceive while still in Rx throws -706 errors
     #else
     state = STATE_IDLE;   // need another startReceive()
     #endif
@@ -154,7 +178,7 @@ int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
   if (state != STATE_RX) {
     int err = _radio->startReceive();
     if (err == RADIOLIB_ERR_NONE) {
-      state = STATE_RX;
+      enteredRx();
     } else {
       MESH_DEBUG_PRINTLN("RadioLibWrapper: error: startReceive(%d)", err);
     }

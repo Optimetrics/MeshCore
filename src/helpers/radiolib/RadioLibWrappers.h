@@ -21,6 +21,11 @@ protected:
   uint16_t _num_floor_samples;
   int32_t _floor_sample_sum;
   uint8_t _preamble_sf;
+  uint32_t _rx_started_ms;         // when the radio last (re)entered receive
+  uint32_t _last_floor_sample_ms;
+  uint16_t _floor_rejects;         // samples turned away since the last accepted round
+
+  void enteredRx();
 
   void idle();
   void startRecv();
@@ -31,7 +36,7 @@ protected:
 
 public:
   RadioLibWrapper(PhysicalLayer& radio, mesh::MainBoard& board)
-    : _radio(&radio), _board(&board), _preamble_sf(0) {
+    : _radio(&radio), _board(&board), _preamble_sf(0), _rx_started_ms(0), _last_floor_sample_ms(0), _floor_rejects(0) {
     n_recv = n_sent = n_recv_errors = 0;
   }
 
