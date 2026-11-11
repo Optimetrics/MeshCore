@@ -1177,6 +1177,14 @@ void MyMesh::formatPacketStatsReply(char *reply) {
                                        getNumRecvFlood(), getNumRecvDirect());
 }
 
+void MyMesh::formatRxDiagReply(char *reply) {
+  RxDiag d = radio_driver.getRxDiag();
+  int snr_x10 = d.crc_fail ? (int)((d.crc_snr_x4_sum * 10) / (4 * (int32_t)d.crc_fail)) : 0;   // mean SNR of CRC failures, in 0.1 dB
+  int rssi = d.crc_fail ? (int)(d.crc_rssi_sum / (int32_t)d.crc_fail) : 0;
+  sprintf(reply, "{\"pool_drops\":%u,\"crc_fail\":%u,\"crc_strong\":%u,\"crc_snr_x10\":%d,\"crc_rssi\":%d,\"hdr_err\":%u,\"preamble_only\":%u}",
+          getNumRxPoolDrops(), d.crc_fail, d.crc_fail_strong, snr_x10, rssi, d.hdr_err, d.preamble_only);
+}
+
 void MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   IdentityStore store(*_fs, "");
@@ -1282,6 +1290,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
+  } else if (strcmp(command, "stats-rxdiag") == 0) {
+    formatRxDiagReply(reply);
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }

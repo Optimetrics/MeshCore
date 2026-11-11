@@ -11,6 +11,9 @@ class CustomSX1262 : public SX1262 {
   bool _headerSeen = false;
 
   public:
+    uint32_t n_hdr_err = 0;         // header failed its check
+    uint32_t n_preamble_only = 0;   // preamble seen, no header within the deadline
+
     CustomSX1262(Module *mod) : SX1262(mod) { }
 
   #ifdef RP2040_PLATFORM
@@ -107,6 +110,7 @@ class CustomSX1262 : public SX1262 {
       bool hdrErr   = irq & RADIOLIB_SX126X_IRQ_HEADER_ERR;        // bit 5
       uint32_t now  = millis();
       if (hdrErr) {
+        n_hdr_err++;
         clearIrqFlags(RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED | RADIOLIB_SX126X_IRQ_HEADER_VALID | RADIOLIB_SX126X_IRQ_HEADER_ERR | RADIOLIB_SX126X_IRQ_SYNC_WORD_VALID);
         _activityAt = 0;
         _headerSeen = false;
@@ -133,6 +137,7 @@ class CustomSX1262 : public SX1262 {
         if (now - _activityAt > _preambleMillis) {
           clearIrqFlags(RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED);
           _activityAt = 0;
+          n_preamble_only++;
           MESH_DEBUG_PRINTLN("Clearing preamble IRQ after %ums", _preambleMillis);
 
           return false;

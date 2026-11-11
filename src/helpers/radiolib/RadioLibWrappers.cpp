@@ -88,6 +88,14 @@ void RadioLibWrapper::resetAGC() {
 }
 
 void RadioLibWrapper::loop() {
+#ifdef RX_DIAG_POLL_MS
+  // Header errors and abandoned preambles are only noticed when the IRQ flags are polled,
+  // which otherwise happens just in bursts (noise floor sampling, before a transmit).
+  if (state == STATE_RX && (uint32_t)(millis() - _last_diag_poll) >= RX_DIAG_POLL_MS) {
+    _last_diag_poll = millis();
+    isReceivingPacket();
+  }
+#endif
   if (state == STATE_RX && _num_floor_samples < NUM_NOISE_FLOOR_SAMPLES) {
     if (!isReceivingPacket()) {
       int rssi = getCurrentRSSI();
@@ -134,6 +142,13 @@ int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
       int err = _radio->readData(bytes, len);
       if (err == RADIOLIB_ERR_NONE && !lastRxHadCRC()) {
         err = RADIOLIB_ERR_LORA_HEADER_DAMAGED;  // header says no CRC, so the payload was never checked
+      }
+      if (err == RADIOLIB_ERR_CRC_MISMATCH || err == RADIOLIB_ERR_LORA_HEADER_DAMAGED) {
+        float snr = getLastSNR();   // packet status is valid for a frame that failed its CRC too
+        _rx_diag.crc_fail++;
+        if (snr >= 0.0f) _rx_diag.crc_fail_strong++;
+        _rx_diag.crc_snr_x4_sum += (int32_t)(snr * 4.0f);
+        _rx_diag.crc_rssi_sum += (int32_t)getLastRSSI();
       }
       if (err != RADIOLIB_ERR_NONE) {
         MESH_DEBUG_PRINTLN("RadioLibWrapper: error: readData(%d)", err);
