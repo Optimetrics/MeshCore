@@ -469,10 +469,10 @@ const char *MyMesh::getLogDateTime() {
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 #if MESH_PACKET_LOGGING
-  Serial.print(getLogDateTime());
-  Serial.print(" RAW: ");
-  mesh::Utils::printHex(Serial, raw, len);
-  Serial.println();
+  MESH_LOG_STREAM.print(getLogDateTime());
+  MESH_LOG_STREAM.print(" RAW: ");
+  mesh::Utils::printHex(MESH_LOG_STREAM, raw, len);
+  MESH_LOG_STREAM.println();
 #endif
 }
 

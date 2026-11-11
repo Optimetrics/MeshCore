@@ -31,6 +31,18 @@
   #define MESH_DEBUG_PRINTLN(...) {}
 #endif
 
+// Where MESH_PACKET_LOGGING output goes. With WITH_BLE_CONSOLE it is a Stream that
+// writes to Serial and also mirrors to the BLE console.
+#if ARDUINO
+  #ifdef WITH_BLE_CONSOLE
+    class Stream;
+    extern Stream& mesh_log_stream;
+    #define MESH_LOG_STREAM mesh_log_stream
+  #else
+    #define MESH_LOG_STREAM Serial
+  #endif
+#endif
+
 #if BRIDGE_DEBUG && ARDUINO
 #define BRIDGE_DEBUG_PRINTLN(F, ...) Serial.printf("%s BRIDGE: " F, getLogDateTime(), ##__VA_ARGS__)
 #else

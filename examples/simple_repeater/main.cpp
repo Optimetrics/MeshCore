@@ -13,6 +13,14 @@
   #include <helpers/nrf52/EthernetCLI.h>
 #endif
 
+#ifdef WITH_BLE_CONSOLE
+  #include <helpers/nrf52/BLEConsole.h>
+  #ifndef BLE_CONSOLE_PIN
+    #error "WITH_BLE_CONSOLE needs a private 6-digit BLE_CONSOLE_PIN"
+  #endif
+  static char ble_command[160];
+#endif
+
 StdRNG fast_rng;
 SimpleMeshTables tables;
 
@@ -114,6 +122,10 @@ void setup() {
   ethernet_start_task();
 #endif
 
+#ifdef WITH_BLE_CONSOLE
+  ble_console.begin(the_mesh.getNodePrefs()->node_name, BLE_CONSOLE_PIN);
+#endif
+
   // send out initial zero hop Advertisement to the mesh
 #if ENABLE_ADVERT_ON_BOOT == 1
   the_mesh.sendSelfAdvertisement(16000, false);
@@ -177,6 +189,15 @@ void loop() {
     }
     ethernet_send_reply(reply);
     ethernet_command[0] = 0;
+  }
+#endif
+
+#ifdef WITH_BLE_CONSOLE
+  if (ble_console.readLine(ble_command, sizeof(ble_command))) {
+    char reply[160];
+    reply[0] = 0;
+    the_mesh.handleCommand(0, ble_command, reply);  // paired clients get the same access as USB serial
+    ble_console.sendReply(ble_command, reply);
   }
 #endif
 
