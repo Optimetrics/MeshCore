@@ -30,6 +30,7 @@ class ThinkNodeM1SensorManager : public SensorManager {
   bool dutyCycling() const;
 public:
   ThinkNodeM1SensorManager(LocationProvider &location): _location(&location) { }
+  bool isGpsActive() const { return gps_active; }
   LocationProvider* getLocationProvider() override { return _location; }
   bool begin() override;
   bool querySensors(uint8_t requester_permissions, CayenneLPP& telemetry) override;
@@ -50,6 +51,8 @@ extern ThinkNodeM1SensorManager sensors;
   extern MomentaryButton user_btn;
   #ifdef UI_ENTER_BTN
   extern MomentaryButton enter_btn;
+  #elif defined(BACKLIGHT_BTN)
+  extern MomentaryButton backlight_btn;
   #endif
 #endif
 

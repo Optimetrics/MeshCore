@@ -61,10 +61,8 @@ class UITask : public AbstractUITask {
   unsigned long _alert_expiry;
   int _msgcount;
   unsigned long ui_started_at, next_batt_chck;
-  int next_backlight_btn_check = 0;
-#ifdef BACKLIGHT_TIMEOUT_MILLIS
-  unsigned long backlight_off_at = 0;
-#endif
+  unsigned long next_backlight_btn_check = 0;
+  unsigned long _backlight_off = 0;
 #ifdef PIN_STATUS_LED
   int led_state = 0;
   unsigned long led_changed_at = 0;
@@ -146,6 +144,7 @@ public:
   bool getGPSState();
   void toggleGPS();
   const char* getSensorSetting(const char* name);   // NULL if the sensor manager has no such setting
+  void triggerGPS();
 
   // MyMesh::Listener
   void onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t txt_type, uint32_t sender_timestamp, const char* text) override;

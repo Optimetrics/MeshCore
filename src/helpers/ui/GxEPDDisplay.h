@@ -16,12 +16,6 @@
 
 #include "DisplayDriver.h"
 
-#ifndef EINK_MAX_PARTIAL_REFRESH
-  // 60 to prevent ghosting when refreshing every minute ...
-  // set to -1 to disable the counter
-  #define EINK_MAX_PARTIAL_REFRESH -1
-#endif
-
 class GxEPDDisplay : public DisplayDriver {
 
 #if defined(EINK_DISPLAY_MODEL)
@@ -39,14 +33,19 @@ class GxEPDDisplay : public DisplayDriver {
 #endif
   bool _init = false;
   bool _isOn = false;
-  bool _full_redraw_pending = false; // next endFrame does a full refresh of the whole screen
   uint16_t _curr_color;
   CRC32 display_crc;
   int last_display_crc_value = 0;
-  int _cycles_before_full_refresh;
-  int max_partial_refresh = EINK_MAX_PARTIAL_REFRESH; // so this can be changed by an option after
-  int _partials_since_full = 0;
+  bool _force_full_refresh = false;  // next endFrame does a full refresh of the whole screen
+  int _partial_refresh_count = 0;    // partial refreshes since the last full one
+  int _max_partial_refresh = 0;      // full refresh after this many partials (0 = never)
   int _line_height = 11;   // virtual units between wrapped lines, set with the font
+  void (*_busy_hook)() = NULL;
+
+  static void busyCallback(const void* self) {
+    ((const GxEPDDisplay*)self)->_busy_hook();
+    delay(1);  // same as GxEPD2 does without a callback
+  }
 
 public:
 #if defined(EINK_DISPLAY_MODEL)
@@ -59,12 +58,16 @@ public:
 
   bool isOn() override { return _isOn; }
   bool isEink() override { return true; }
-  void forceFullRefresh() override { _full_redraw_pending = true; };
-  int getPartialRefreshCount() override { return _partials_since_full; }
-  void resetPartialRefreshCounter() { _cycles_before_full_refresh = max_partial_refresh; };
+  void forceFullRefresh() override { _force_full_refresh = true; }
+  int getPartialRefreshCount() override { return _partial_refresh_count; }
+  void turnOn(int max_partial) override;
+  void setBusyHook(void (*hook)()) override { _busy_hook = hook; }
   void turnOn() override;
-  void turnOff() override;
+  void turnOff(bool blank) override;
+  void turnOff() override { turnOff(false); }
   void turnOffKeepImage() override;
+  virtual void blankScreen();
+  virtual void setMaxPartialRefresh(int count) {_max_partial_refresh = count; }
   void clear() override;
   void startFrame(ColorVal bkg = UIColor::window_bkg) override;
   void setTextSize(int sz) override;
@@ -76,6 +79,7 @@ public:
   void fillRect(int x, int y, int w, int h) override;
   void drawRect(int x, int y, int w, int h) override;
   void drawXbm(int x, int y, const uint8_t* bits, int w, int h) override;
+  void drawSleepIcon();
   uint16_t getTextWidth(const char* str) override;
   void endFrame() override;
 };

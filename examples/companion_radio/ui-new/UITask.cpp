@@ -33,6 +33,13 @@ static void formatAge(char* buf, int secs, bool coarse) {
 }
 
 // Used both for recent adverts and discovered nodes
+// the board's backlight_btn object; a board whose Enter button also drives the backlight has none
+#if defined(BACKLIGHT_BTN) && !defined(UI_ENTER_BTN)
+  #define UI_HAS_BACKLIGHT_BTN 1
+#else
+  #define UI_HAS_BACKLIGHT_BTN 0
+#endif
+
 #ifndef UI_RECENT_LIST_SIZE
   #define UI_RECENT_LIST_SIZE 4
 #endif
@@ -112,6 +119,30 @@ public:
   }
 };
 
+#if ENV_INCLUDE_GPS == 1
+// exact period with the largest unit that divides it: "30s", "5m", "2h"
+static void formatGpsPeriod(char* buf, size_t size, uint32_t seconds) {
+  if (seconds % 3600 == 0) {
+    snprintf(buf, size, "%luh", (unsigned long)(seconds / 3600));
+  } else if (seconds % 60 == 0) {
+    snprintf(buf, size, "%lum", (unsigned long)(seconds / 60));
+  } else {
+    snprintf(buf, size, "%lus", (unsigned long)seconds);
+  }
+}
+
+// age of the last fix, rounded down to a single unit: "45s", "12m", "3h"
+static void formatFixAge(char* buf, size_t size, uint32_t seconds) {
+  if (seconds < 60) {
+    snprintf(buf, size, "%lus", (unsigned long)seconds);
+  } else if (seconds < 3600) {
+    snprintf(buf, size, "%lum", (unsigned long)(seconds / 60));
+  } else {
+    snprintf(buf, size, "%luh", (unsigned long)(seconds / 3600));
+  }
+}
+#endif
+
 class HomeScreen : public UIScreen {
   enum HomePage {
     FIRST,
@@ -172,7 +203,6 @@ class HomeScreen : public UIScreen {
   uint32_t disc_node_req_tag = 0;
   uint32_t disc_nodes_count = 0;
   uint32_t discovery_req_time = 0;
-  bool discovery_disp_names = true; // by default desplay names if available (removes SNR_O)
 #endif
 
 #if defined(UI_TRACK_PAGE) || defined(UI_RECENT_DETAIL)
@@ -339,7 +369,7 @@ class HomeScreen : public UIScreen {
       const char* iv = _task->getSensorSetting("gps_interval");
       uint32_t max_age = 300;
       if (iv != NULL && (uint32_t)atol(iv) + 60 > max_age) max_age = atol(iv) + 60;
-      if (loc->getFixAgeSecs() <= max_age) display.drawXbm(x -= 9, iconY + 1, gps_fix_icon, 8, 8);
+      if (loc->getLastFixAge() <= max_age) display.drawXbm(x -= 9, iconY + 1, gps_fix_icon, 8, 8);
     }
   #endif
     if (_task->getUnreadCount() > 0) {
@@ -368,11 +398,10 @@ class HomeScreen : public UIScreen {
         sensors_nb ++;
       }
       sensors_scroll = sensors_nb > UI_RECENT_LIST_SIZE;
-#if AUTO_OFF_MILLIS > 0
-      next_sensors_refresh = millis() + 5000; // refresh sensor values every 5 sec
-#else
-      next_sensors_refresh = millis() + 60000; // refresh sensor values every 1 min
-#endif
+      if (display.isEink()) // preserve eink displays
+        next_sensors_refresh = millis() + 60000; // refresh sensor values every 1 min
+      else
+        next_sensors_refresh = millis() + 5000; // refresh sensor values every 5 sec
     }
   }
 
@@ -464,14 +493,14 @@ public:
       sprintf(tmp, "MSG: %d", _task->getUnreadCount());
       display.drawTextCentered(display.width() / 2, 22, tmp);
       #endif
-      #ifdef UI_SHOW_CLOCK
-      display.setTextSize(3);
-      uint32_t now = _rtc->getCurrentTime();
-      if (now < buildEpoch()) {   // not synced from the phone, GPS or a clock chip yet
-        display.drawTextCentered(display.width() / 2, 60, "--:--");
-        display.setTextSize(1);
-        display.drawTextCentered(display.width() / 2, 80, "time not set");
-      } else {
+      if (_node_prefs->ui_show_clock) {
+        display.setTextSize(3);
+        uint32_t now = _rtc->getCurrentTime();
+        if (now < buildEpoch()) {   // not synced from the phone, GPS or a clock chip yet
+          display.drawTextCentered(display.width() / 2, 60, "--:--");
+          display.setTextSize(1);
+          display.drawTextCentered(display.width() / 2, 80, "time not set");
+        } else {
         now += (int32_t)(_node_prefs->tz_offset * 3600);
         DateTime dt (now);
         sprintf(tmp, "%02d:%02d", dt.hour(), dt.minute());
@@ -480,7 +509,7 @@ public:
         sprintf(tmp, "%02d/%02d/%d", dt.day(), dt.month(), dt.year());
         display.drawTextCentered(display.width() / 2, 80, tmp);
       }
-      #endif
+      }
       #ifdef ENABLE_WIFI_INTERFACE
         IPAddress ip = WiFi.localIP();
         snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
@@ -491,22 +520,21 @@ public:
       if (the_mesh.getBLEPin() != 0 && _task->isBluetoothEnabled() && !_task->isBluetoothConnected()) {
         display.setColor(UIColor::warning_txt);
         sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
-        #ifdef UI_SHOW_CLOCK
-        // big enough to read off while pairing, when there is room below the clock
-        display.setTextSize(display.height() > 64 ? 2 : 1);
-        display.drawTextCentered(display.width() / 2, display.height() > 64 ? 100 : 110, tmp);
-        #else
-        display.setTextSize(2);
-        display.drawTextCentered(display.width() / 2, 43, tmp);
-        #endif
+        if (_node_prefs->ui_show_clock) {
+          // big enough to read off while pairing, when there is room below the clock
+          display.setTextSize(display.height() > 64 ? 2 : 1);
+          display.drawTextCentered(display.width() / 2, display.height() > 64 ? 100 : 110, tmp);
+        } else {
+          display.setTextSize(2);
+          display.drawTextCentered(display.width() / 2, 43, tmp);
+        }
       } else if (_task->hasConnection()) {
         display.setColor(UIColor::warning_txt);
         display.setTextSize(1);
-        #ifdef UI_SHOW_CLOCK
-        display.drawTextCentered(display.width() / 2, 110, "< Connected >");
-        #else
-        display.drawTextCentered(display.width() / 2, 43, "< Connected >");
-        #endif
+        if (_node_prefs->ui_show_clock)
+          display.drawTextCentered(display.width() / 2, 110, "< Connected >");
+        else
+          display.drawTextCentered(display.width() / 2, 43, "< Connected >");
       }
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
@@ -605,23 +633,25 @@ public:
       char buf[50];
       int y = 18;
       bool gps_state = _task->getGPSState();
-      const char* sw = _task->getSensorSetting("gps_switch");   // boards that report their GPS switch
+      bool hw_gps_state = nmea != NULL && nmea->isHardwareEnabled();
+      uint32_t period = nmea != NULL ? nmea->getGpsPeriod() : 0;
+      const char* sw = _task->getSensorSetting("gps_switch");    // boards that report their GPS switch
+      const char* awake = _task->getSensorSetting("gps_awake");  // and whether it's asleep between fixes
       if (sw != NULL) {
         if (sw[0] == '0') strcpy(buf, "gps off (switch)");
         else if (!gps_state) strcpy(buf, "gps off");
-        else if (nmea != NULL && !nmea->isEnabled()) strcpy(buf, "gps asleep");   // between fixes
+        else if (awake != NULL && awake[0] == '0') strcpy(buf, "gps asleep");
         else strcpy(buf, "gps on");
+      } else if (nmea != NULL && nmea->hasHardwareEnableState() && gps_state != hw_gps_state) {
+        strcpy(buf, gps_state ? "gps off(hw)" : "gps off(sw)");
+      } else if (!gps_state) {
+        strcpy(buf, "gps off");
+      } else if (period == 0) {
+        strcpy(buf, "gps on");
       } else {
-#ifdef PIN_GPS_SWITCH
-        bool hw_gps_state = digitalRead(PIN_GPS_SWITCH);
-        if (gps_state != hw_gps_state) {
-          strcpy(buf, gps_state ? "gps off(hw)" : "gps off(sw)");
-        } else {
-          strcpy(buf, gps_state ? "gps on" : "gps off");
-        }
-#else
-        strcpy(buf, gps_state ? "gps on" : "gps off");
-#endif
+        char per[12];
+        formatGpsPeriod(per, sizeof(per), period);
+        snprintf(buf, sizeof(buf), "%s (%s)", nmea != NULL && nmea->isActive() ? "active" : "sleep", per);
       }
       display.setColor(UIColor::primary_txt);
       display.drawTextLeftAlign(0, y, buf);
@@ -631,7 +661,7 @@ public:
         display.drawTextLeftAlign(0, y, "Can't access GPS");
       } else {
         // fix freshness: "fix" while current, otherwise how long ago the last one was
-        uint32_t fix_age = nmea->getFixAgeSecs();
+        uint32_t fix_age = nmea->getLastFixAge();
         bool fresh = nmea->isValid() && fix_age <= 5;
         if (fresh) {
           strcpy(buf, "fix");
@@ -763,7 +793,7 @@ public:
       for (int i = 0; i < count; i++, y += 11) {
         char name[32];
         auto a = &discovered[i];
-        if ((a->name[0] == 0) || !discovery_disp_names) {
+        if ((a->name[0] == 0) || !_node_prefs->ui_nd_name) {
           mesh::Utils::toHex(name, a->pubkey_prefix, 4);
         } else {
           strncpy(name, a->name, 32);
@@ -867,7 +897,7 @@ public:
     }
 #if ENV_INCLUDE_GPS == 1
     if (c == KEY_ENTER && _page == HomePage::GPS) {
-      _task->toggleGPS();
+      if (_node_prefs->ui_gps_action == 1) _task->triggerGPS(); else _task->toggleGPS();
       return true;
     }
 #endif
@@ -886,7 +916,7 @@ public:
       return true;
     }
     if (c == KEY_SELECT && _page == HomePage::DISCOVERY) {
-      discovery_disp_names = !discovery_disp_names;
+      _node_prefs->ui_nd_name = !_node_prefs->ui_nd_name;
       return true;
     }
 #endif
@@ -1022,11 +1052,7 @@ public:
       }
     }
 
-#if AUTO_OFF_MILLIS==0 // probably e-ink
-    return 10000; // 10 s
-#else
-    return 1000;  // next render after 1000 ms
-#endif
+    return display.isEink() ? 10000 : 1000; // 10 s for eink
   }
 
   bool handleInput(char c) override {
@@ -1065,7 +1091,6 @@ public:
 void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs) {
   _display = display;
   _sensors = sensors;
-  _auto_off = millis() + AUTO_OFF_MILLIS;
 
 #if defined(PIN_USER_BTN)
   user_btn.begin();
@@ -1076,11 +1101,16 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #if defined(PIN_USER_BTN_ANA)
   analog_btn.begin();
 #endif
+#if UI_HAS_BACKLIGHT_BTN
+  backlight_btn.begin();
+#endif
 
   _node_prefs = node_prefs;
+  _auto_off = millis() + _node_prefs->ui_auto_off_delay * 1000;
+  _backlight_off = millis() + _node_prefs->ui_backlight_delay * 1000;
 
   if (_display != NULL) {
-    _display->turnOn();
+    _display->turnOn(_node_prefs->ui_max_partial);
   }
 
 #ifdef PIN_BUZZER
@@ -1190,10 +1220,10 @@ void UITask::showNewMessage(const char* from) {
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection()) {
-      _display->turnOn();
+      _display->turnOn(_node_prefs->ui_max_partial);
     }
     if (_display->isOn()) {
-    _auto_off = millis() + AUTO_OFF_MILLIS;  // extend the auto-off timer
+    _auto_off = millis() + _node_prefs->ui_auto_off_delay * 1000;  // extend the auto-off timer
     _next_refresh = 100;  // trigger refresh
     }
   }
@@ -1377,7 +1407,7 @@ void UITask::loop() {
   if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_ENTER);
   } else if (ev == BUTTON_EVENT_LONG_PRESS) {
-    display.turnOff();
+    display.turnOff(true);
   } else if (ev == BUTTON_EVENT_DOUBLE_CLICK) {
     c = handleDoubleClick(KEY_SELECT);
   } else if (ev == BUTTON_EVENT_TRIPLE_CLICK) {
@@ -1415,11 +1445,11 @@ void UITask::loop() {
 #endif
 #if defined(UI_HAS_ROTARY_INPUT)
   RotaryInputEvent rotaryEv = rotary_input.poll();
-  if (c == 0 && _display != NULL && _display->isOn()) {
+  if (c == 0 && _display != NULL) {
     if (rotaryEv == RotaryInputEvent::Next) {
-      c = KEY_NEXT;
+      c = checkDisplayOn(KEY_NEXT);
     } else if (rotaryEv == RotaryInputEvent::Prev) {
-      c = KEY_PREV;
+      c = checkDisplayOn(KEY_PREV);
     }
   }
 #endif
@@ -1440,31 +1470,55 @@ void UITask::loop() {
 #endif
 #if defined(UI_ENTER_BTN) && defined(BACKLIGHT_TIMEOUT_MILLIS)
   if (_backlight_on && millis() - _backlight_on_at >= BACKLIGHT_TIMEOUT_MILLIS) setBacklight(false);
-#elif defined(BACKLIGHT_BTN)
+#elif defined(DISP_BACKLIGHT) || defined(EXP_PIN_BACKLIGHT)
+#if UI_HAS_BACKLIGHT_BTN
   if (millis() > next_backlight_btn_check) {
-    bool touch_state = digitalRead(PIN_BUTTON2);
-#ifdef BACKLIGHT_TIMEOUT_MILLIS
-    // press (active low) starts or extends the timer; light stays on until it runs out
-    if (!touch_state) backlight_off_at = millis() + BACKLIGHT_TIMEOUT_MILLIS;
-  #ifdef UI_EINK_IDLE_CLEANUP_SECS
-    if (!touch_state) noteInput();   // reading by the backlight counts as use
-  #endif
-    bool light_on = millis() < backlight_off_at;
-#else
-    bool light_on = !touch_state;  // lit only while held
+    if (backlight_btn.isPressed()) {
+      if (!_display->isOn()) {
+        _display->turnOn(_node_prefs->ui_max_partial);
+        _next_refresh = 0;
+      }
+      _auto_off = millis() + _node_prefs->ui_auto_off_delay * 1000;   // extend auto-off timer
+      _backlight_off = millis() + _node_prefs->ui_backlight_delay * 1000; // extend auto_off for backlight
+#ifdef UI_EINK_IDLE_CLEANUP_SECS
+      noteInput();   // reading by the backlight counts as use
 #endif
-#if defined(DISP_BACKLIGHT)
-    digitalWrite(DISP_BACKLIGHT, light_on);
-#elif defined(EXP_PIN_BACKLIGHT)
-    expander.digitalWrite(EXP_PIN_BACKLIGHT, light_on);
-#endif
-    next_backlight_btn_check = millis() + 300;
+    }
+    next_backlight_btn_check = millis() + 100;
   }
+  int bev = backlight_btn.check();
+  if (bev == BUTTON_EVENT_DOUBLE_CLICK) {
+    _display->forceFullRefresh();
+  } else if (bev == BUTTON_EVENT_TRIPLE_CLICK) {
+    _display->turnOff(true);
+    _backlight_off = 0;
+  }
+#endif
+
+  bool backlight_state;
+  if (_node_prefs->ui_backlight_delay == -1) {
+    backlight_state = true;
+  } else if (_node_prefs->ui_backlight_delay < -1) {
+    backlight_state = false;
+  } else if (_node_prefs->ui_backlight_delay == 0) {
+    backlight_state = false;
+    #if UI_HAS_BACKLIGHT_BTN
+      backlight_state = backlight_btn.isPressed();
+    #endif
+  } else {
+    backlight_state = (millis() < _backlight_off);
+  }
+
+#if defined(DISP_BACKLIGHT)
+  digitalWrite(DISP_BACKLIGHT, backlight_state);
+#elif defined(EXP_PIN_BACKLIGHT)
+  expander.digitalWrite(EXP_PIN_BACKLIGHT, backlight_state);
+#endif
 #endif
 
   if (c != 0 && curr) {
     curr->handleInput(c);
-    _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
+    _auto_off = millis() + _node_prefs->ui_auto_off_delay * 1000;   // extend auto-off timer
     _next_refresh = 100;  // trigger refresh
 #ifdef UI_EINK_IDLE_CLEANUP_SECS
     noteInput();
@@ -1500,6 +1554,7 @@ void UITask::loop() {
   userLedHandler();
 
 #ifdef PIN_BUZZER
+  if (buzzer.isQuiet() != (bool)_node_prefs->buzzer_quiet) buzzer.quiet(_node_prefs->buzzer_quiet);
   if (buzzer.isPlaying())  buzzer.loop();
 #endif
 
@@ -1549,20 +1604,27 @@ void UITask::loop() {
       }
     }
 #endif
-#if AUTO_OFF_MILLIS > 0
+    if (_node_prefs->ui_auto_off_delay > 0) {
 #ifdef KEEP_DISPLAY_ON_USB
-    // Opt-in: refresh the auto-off deadline while externally powered, so the
-    // timer counts from the moment external power is removed. Off by default
-    // because OLED panels burn in quickly; only enable for LCD targets or
-    // where the display is replaceable.
-    if (board.isExternalPowered()) {
-      _auto_off = millis() + AUTO_OFF_MILLIS;
-    }
+      // Opt-in: refresh the auto-off deadline while externally powered, so the
+      // timer counts from the moment external power is removed. Off by default
+      // because OLED panels burn in quickly; only enable for LCD targets or
+      // where the display is replaceable.
+      if (board.isExternalPowered()) {
+        _auto_off = millis() + _node_prefs->ui_auto_off_delay * 1000;
+      }
 #endif
-    if (millis() > _auto_off) {
-      _display->turnOff();
+      if (millis() > _auto_off) {
+        if (_node_prefs->ui_auto_off_blank &&
+              !(_node_prefs->ui_auto_off_keep_msgs 
+                          && curr == msg_preview)) { 
+            // don't blank if messages are waiting
+            _display->turnOff(true);
+        } else {
+          _display->turnOff();
+        }
+      }
     }
-#endif
   }
 
 #ifdef PIN_VIBRATION
@@ -1588,10 +1650,13 @@ void UITask::loop() {
 char UITask::checkDisplayOn(char c) {
   if (_display != NULL) {
     if (!_display->isOn()) {
-      _display->turnOn();   // turn display on and consume event
+      _display->turnOn(_node_prefs->ui_max_partial);   // turn display on and consume event
       c = 0;
     }
-    _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
+    _auto_off = millis() + _node_prefs->ui_auto_off_delay * 1000;   // extend auto-off timer
+    if (_node_prefs->ui_backlight_on_keys) {
+      _backlight_off = millis() + _node_prefs->ui_backlight_delay * 1000;
+    }
     _next_refresh = 0;  // trigger refresh
 #ifdef UI_EINK_IDLE_CLEANUP_SECS
     noteInput();
@@ -1672,24 +1737,34 @@ void UITask::toggleGPS() {
     for (int i = 0; i < num; i++) {
       if (strcmp(_sensors->getSettingName(i), "gps") == 0) {
         if (strcmp(_sensors->getSettingValue(i), "1") == 0) {
-          _sensors->setSettingValue("gps", "0");
-          _node_prefs->gps_enabled = 0;
+          _node_prefs->getGpsPrefs()->setGpsEnabled(*_sensors, false);
           notify(UIEventType::toggleOff);
-        } else if (_sensors->setSettingValue("gps", "1")) {
-          _node_prefs->gps_enabled = 1;
+        } else {
+          _node_prefs->getGpsPrefs()->setGpsEnabled(*_sensors, true);
+          if (strcmp(_sensors->getSettingValue(i), "1") != 0) {   // e.g. a hardware GPS switch that is off
+            _node_prefs->getGpsPrefs()->setGpsEnabled(*_sensors, false);
+            showAlert("GPS switch is off", 1000);
+            _next_refresh = 0;
+            break;
+          }
           notify(UIEventType::toggleOn);
-        } else {   // e.g. a hardware GPS switch that is off
-          showAlert("GPS switch is off", 1000);
-          _next_refresh = 0;
-          break;
         }
         the_mesh.savePrefs();
-        showAlert(_node_prefs->gps_enabled ? "GPS: Enabled" : "GPS: Disabled", 800);
+        showAlert(_node_prefs->getGpsPrefs()->isGpsEnabled() ? "GPS: Enabled" : "GPS: Disabled", 800);
         _next_refresh = 0;
         break;
       }
     }
   }
+}
+
+void UITask::triggerGPS() {
+  LocationProvider* location = _sensors != NULL ? _sensors->getLocationProvider() : NULL;
+  if (location != NULL && !(location->hasHardwareEnableState() && !location->isHardwareEnabled())
+      && location->startOnce()) {
+    notify(UIEventType::ack);
+  }
+  _next_refresh = 0;
 }
 
 void UITask::toggleBuzzer() {

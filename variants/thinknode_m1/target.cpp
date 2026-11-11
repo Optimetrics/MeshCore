@@ -2,6 +2,7 @@
 #include "target.h"
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/sensors/MicroNMEALocationProvider.h>
+#include <helpers/sensors/NmeaGpsDriver.h>
 
 ThinkNodeM1Board board;
 
@@ -11,7 +12,21 @@ WRAPPER_CLASS radio_driver(radio, board);
 
 VolatileRTCClock fallback_clock;
 AutoDiscoverRTCClock rtc_clock(fallback_clock);
-MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock);
+// The sensor manager below owns the GPS: the slide switch is the authority and it sleeps
+// the L76K on its standby line between fixes. GPS_SWITCH_IS_HARDWARE is left at its
+// default (1) so the driver doesn't also poll the switch and fight it.
+NmeaGpsDriver gps_driver(Serial1);
+
+// Shared code (the GPS CLI, saved prefs, the UI toggle) turns the GPS on and off through
+// setGpsOn(); send that to the sensor manager so the switch check and duty cycling apply.
+class ThinkNodeM1LocationProvider : public MicroNMEALocationProvider {
+public:
+  using MicroNMEALocationProvider::MicroNMEALocationProvider;
+  void setGpsOn(bool on) override;
+  bool isGpsOn() const override;
+};
+
+ThinkNodeM1LocationProvider nmea(gps_driver, &rtc_clock);
 ThinkNodeM1SensorManager sensors = ThinkNodeM1SensorManager(nmea);
 
 #ifdef DISPLAY_CLASS
@@ -19,6 +34,8 @@ ThinkNodeM1SensorManager sensors = ThinkNodeM1SensorManager(nmea);
   MomentaryButton user_btn(PIN_USER_BTN, 1000, true, true);   // no external pull-up on the M1 buttons
   #ifdef UI_ENTER_BTN
   MomentaryButton enter_btn(UI_ENTER_BTN, 1000, true, true, false);   // single clicks only, so they act at once
+  #elif defined(BACKLIGHT_BTN)
+  MomentaryButton backlight_btn(BACKLIGHT_BTN, 1000, true, true);
   #endif
 #endif
 
@@ -41,8 +58,7 @@ void ThinkNodeM1SensorManager::start_gps() {
   // the slide switch cuts GPS power: never drive its UART or control lines into an unpowered L76K
   if (!gps_active && digitalRead(PIN_GPS_SWITCH) == HIGH) {
     gps_active = true;
-    Serial1.begin(9600);
-    _location->begin();
+    _location->begin();   // the driver opens Serial1 and raises the standby and reset lines
     _location->reset();   // fresh power: reset, then multi-constellation and sentence setup (GPS_L76K)
     gps_awake = true;
     awake_since = millis();
@@ -155,8 +171,8 @@ void ThinkNodeM1SensorManager::loop() {
   _location->loop();
 
   // a fix counts once a fresh GGA/RMC with a valid position arrived since this wake
-  bool fresh_fix = _location->isValid() && _location->getFixAgeSecs() <= 2
-                   && _location->getFixAgeSecs() * 1000UL <= now - awake_since;
+  bool fresh_fix = _location->isValid() && _location->getLastFixAge() <= 2
+                   && _location->getLastFixAge() * 1000UL <= now - awake_since;
   if (fresh_fix && fix_at == 0) fix_at = now;
 
   if (millis() > next_gps_update) {
@@ -175,8 +191,16 @@ void ThinkNodeM1SensorManager::loop() {
   }
 }
 
+void ThinkNodeM1LocationProvider::setGpsOn(bool on) {
+  sensors.setSettingValue("gps", on ? "1" : "0");
+}
+
+bool ThinkNodeM1LocationProvider::isGpsOn() const {
+  return sensors.isGpsActive();
+}
+
 int ThinkNodeM1SensorManager::getNumSettings() const {
-  return 3;
+  return 4;
 }
 
 const char* ThinkNodeM1SensorManager::getSettingName(int i) const {
@@ -184,6 +208,7 @@ const char* ThinkNodeM1SensorManager::getSettingName(int i) const {
     case 0: return "gps";
     case 1: return "gps_interval";
     case 2: return "gps_switch";   // read-only: the hardware slide switch
+    case 3: return "gps_awake";    // read-only: 0 while asleep between fixes
   }
   return NULL;
 }
@@ -195,6 +220,7 @@ const char* ThinkNodeM1SensorManager::getSettingValue(int i) const {
       sprintf(interval_str, "%lu", (unsigned long)gps_interval_secs);
       return interval_str;
     case 2: return digitalRead(PIN_GPS_SWITCH) == HIGH ? "1" : "0";
+    case 3: return gps_awake ? "1" : "0";
   }
   return NULL;
 }
@@ -219,4 +245,3 @@ bool ThinkNodeM1SensorManager::setSettingValue(const char* name, const char* val
   }
   return false;  // not supported
 }
-

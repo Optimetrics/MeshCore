@@ -25,9 +25,12 @@ public:
   virtual bool isEink() { return false; } // default to non-eink, override in eink drivers
   virtual void forceFullRefresh() {} // next refresh will be full for eink
   virtual int getPartialRefreshCount() { return 0; } // eink: partial refreshes since the last full one
+  virtual void setBusyHook(void (*hook)()) {} // eink: hook is called repeatedly while waiting for panel refresh
   virtual void turnOn() = 0;
+  virtual void turnOn(int max_partial) { turnOn(); }
   virtual void turnOff() = 0;
   virtual void turnOffKeepImage() { turnOff(); }  // e-ink: power down but leave the last frame showing
+  virtual void turnOff(bool blank) { turnOff(); }
   virtual void clear() = 0;
   virtual void startFrame(ColorVal bkg = UIColor::window_bkg) = 0;
   virtual void setTextSize(int sz) = 0;
