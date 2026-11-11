@@ -9,7 +9,11 @@
 
 T096Board board;
 
-#if defined(P_LORA_SCLK)
+#if defined(P_LORA_SCLK) && defined(P_LORA_SPI_FREQ)
+#include <helpers/radiolib/NRF52BulkSpiHal.h>
+static NRF52BulkSpiHal radio_hal(SPI, P_LORA_SPI_FREQ);
+RADIO_CLASS radio = new Module(&radio_hal, P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY);
+#elif defined(P_LORA_SCLK)
 RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, SPI);
 #else
 RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY);
