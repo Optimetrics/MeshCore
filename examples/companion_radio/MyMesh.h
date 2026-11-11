@@ -85,6 +85,7 @@ struct AdvertPath {
   char    name[32];
   uint32_t recv_timestamp;
   uint8_t path[MAX_PATH_SIZE];
+  int8_t  snr_x4;    // SNR (x4) the latest advert arrived with
 };
 
 class MyMesh : public BaseChatMesh, public DataStoreHost {
@@ -153,6 +154,8 @@ protected:
   void onContactOverwrite(const uint8_t* pub_key) override;
   bool onContactPathRecv(ContactInfo& from, uint8_t* in_path, uint8_t in_path_len, uint8_t* out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) override;
   void onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) override;
+  void onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, uint32_t timestamp, const uint8_t* app_data, size_t app_data_len) override;
+  int8_t _advert_snr_x4 = 0;   // SNR of the advert being handled, for the recent list
   void onContactPathUpdated(const ContactInfo &contact) override;
   ContactInfo* processAck(const uint8_t *data) override;
   void queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packet *pkt, uint32_t sender_timestamp,
@@ -215,6 +218,14 @@ public:
 
   // To check if there is pending work
   bool hasPendingWork() const;
+
+  // write out anything still waiting on a lazy save, before a reboot or power-off
+  void flushPendingWrites() {
+    if (dirty_contacts_expiry) {
+      saveContacts();
+      dirty_contacts_expiry = 0;
+    }
+  }
 
 private:
   void writeOKFrame();

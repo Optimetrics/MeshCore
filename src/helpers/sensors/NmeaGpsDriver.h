@@ -257,6 +257,11 @@ public:
         delay(250);
         sendNmeaSentence("$PCAS04,7");
         delay(250);
+  #ifdef GPS_L76K_GGA_RMC_ONLY
+        // only the GGA and RMC sentences the parser uses, so less UART traffic to wake for
+        sendNmeaSentence("$PCAS03,1,0,0,0,1,0,0,0,0,0,,,0,0");
+        delay(250);
+  #endif
 #endif
     }
 

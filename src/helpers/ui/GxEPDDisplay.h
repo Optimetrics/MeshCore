@@ -36,9 +36,10 @@ class GxEPDDisplay : public DisplayDriver {
   uint16_t _curr_color;
   CRC32 display_crc;
   int last_display_crc_value = 0;
-  bool _force_full_refresh = false;
-  int _partial_refresh_count = 0;
-  int _max_partial_refresh = 0;
+  bool _force_full_refresh = false;  // next endFrame does a full refresh of the whole screen
+  int _partial_refresh_count = 0;    // partial refreshes since the last full one
+  int _max_partial_refresh = 0;      // full refresh after this many partials (0 = never)
+  int _line_height = 11;   // virtual units between wrapped lines, set with the font
   void (*_busy_hook)() = NULL;
 
   static void busyCallback(const void* self) {
@@ -58,11 +59,13 @@ public:
   bool isOn() override { return _isOn; }
   bool isEink() override { return true; }
   void forceFullRefresh() override { _force_full_refresh = true; }
+  int getPartialRefreshCount() override { return _partial_refresh_count; }
   void turnOn(int max_partial) override;
   void setBusyHook(void (*hook)()) override { _busy_hook = hook; }
   void turnOn() override;
   void turnOff(bool blank) override;
   void turnOff() override { turnOff(false); }
+  void turnOffKeepImage() override;
   virtual void blankScreen();
   virtual void setMaxPartialRefresh(int count) {_max_partial_refresh = count; }
   void clear() override;
@@ -71,6 +74,8 @@ public:
   void setColor(ColorVal c) override;
   void setCursor(int x, int y) override;
   void print(const char* str) override;
+  int printWordWrap(const char* str, int max_width) override;
+  void translateUTF8ToBlocks(char* dest, const char* src, size_t dest_size) override;
   void fillRect(int x, int y, int w, int h) override;
   void drawRect(int x, int y, int w, int h) override;
   void drawXbm(int x, int y, const uint8_t* bits, int w, int h) override;

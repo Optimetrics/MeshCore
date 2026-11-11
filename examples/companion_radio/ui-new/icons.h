@@ -130,3 +130,17 @@ static const uint8_t charging_icon[] = {
 static const uint8_t plug_icon[] = {
   0x24, 0x24, 0x7E, 0x7E, 0x7E, 0x3C, 0x18, 0x18
 };
+// small envelope, 8x8px, status bar: unread messages on the device
+static const uint8_t mail_icon[] = {
+  0x00, 0xFF, 0xC3, 0xA5, 0x99, 0x81, 0xFF, 0x00
+};
+
+// small Bluetooth rune, 8x8px, status bar: a phone is connected over BLE
+static const uint8_t ble_link_icon[] = {
+  0x10, 0x18, 0x54, 0x38, 0x38, 0x54, 0x18, 0x10
+};
+
+// small crosshair, 8x8px, status bar: the GPS has a current fix
+static const uint8_t gps_fix_icon[] = {
+  0x10, 0x38, 0x44, 0xEE, 0x44, 0x38, 0x10, 0x00
+};

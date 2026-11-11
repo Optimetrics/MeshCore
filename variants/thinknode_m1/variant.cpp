@@ -21,9 +21,9 @@ void initVariant() {
   pinMode(PIN_BUTTON2, INPUT_PULLUP);
 
   pinMode(LED_RED, OUTPUT);
-  pinMode(LED_GREEN, OUTPUT);
+  digitalWrite(LED_RED, !LED_STATE_ON);
   pinMode(LED_BLUE, OUTPUT);
-  digitalWrite(LED_BLUE, HIGH);
+  digitalWrite(LED_BLUE, !LED_STATE_ON);
 
   pinMode(PIN_TXCO, OUTPUT);
   digitalWrite(PIN_TXCO, HIGH);

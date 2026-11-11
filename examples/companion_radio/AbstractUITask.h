@@ -20,7 +20,9 @@ enum class UIEventType {
     channelMessage,
     roomMessage,
     newContactMessage,
-    ack
+    ack,
+    toggleOn,    // something switched on (rising tone)
+    toggleOff    // and off (falling tone)
 };
 
 class AbstractUITask : public MyMesh::Listener {
@@ -35,6 +37,7 @@ public:
   bool hasConnection() const { return _interfaceManager->isConnected(); }
   uint16_t getBattMilliVolts() const { return _board->getBattMilliVolts(); }
   bool isBluetoothEnabled() const { return _interfaceManager->isBluetoothEnabled(); }
+  bool isBluetoothConnected() const { return _interfaceManager->isBluetoothConnected(); }
   void enableBluetooth() { _interfaceManager->enableBluetooth(); }
   void disableBluetooth() { _interfaceManager->disableBluetooth(); }
 

@@ -14,12 +14,23 @@
 #endif
 
 class ThinkNodeM1SensorManager : public SensorManager {
+  bool gps_active = false;          // switched on: awake, or asleep between fixes
+  bool gps_awake = false;
+  bool last_gps_switch_state = false;
+  uint32_t gps_interval_secs = 0;   // from the app: sleep between fixes, 0 = run continuously
+  unsigned long awake_since = 0, fix_at = 0, wake_at = 0;
+  mutable char interval_str[12];
   LocationProvider* _location;
 
   void start_gps();
   void stop_gps();
+  void wake_gps();
+  void sleep_gps();
+  void scheduleWake();
+  bool dutyCycling() const;
 public:
   ThinkNodeM1SensorManager(LocationProvider &location): _location(&location) { }
+  bool isGpsActive() const { return gps_active; }
   LocationProvider* getLocationProvider() override { return _location; }
   bool begin() override;
   bool querySensors(uint8_t requester_permissions, CayenneLPP& telemetry) override;
@@ -38,7 +49,11 @@ extern ThinkNodeM1SensorManager sensors;
 #ifdef DISPLAY_CLASS
   extern DISPLAY_CLASS display;
   extern MomentaryButton user_btn;
+  #ifdef UI_ENTER_BTN
+  extern MomentaryButton enter_btn;
+  #elif defined(BACKLIGHT_BTN)
   extern MomentaryButton backlight_btn;
+  #endif
 #endif
 
 bool radio_init();

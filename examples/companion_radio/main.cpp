@@ -162,7 +162,20 @@ void setup() {
   }
 #endif
 
-  if (!radio_init()) { halt(); }
+  if (!radio_init()) {
+#ifdef DISPLAY_CLASS
+    if (disp != NULL) {   // say why it stopped instead of sitting on "Loading..."
+      disp->startFrame();
+      disp->setTextSize(1);
+      disp->setColor(UIColor::warning_txt);
+      disp->drawTextCentered(disp->width() / 2, 20, "Radio failed to start");
+      disp->setColor(UIColor::secondary_txt);
+      disp->drawTextCentered(disp->width() / 2, 34, "restart to try again");
+      disp->endFrame();
+    }
+#endif
+    halt();
+  }
 
   fast_rng.begin(radio_driver.getRngSeed());
 
@@ -314,6 +327,12 @@ void setup() {
 #endif
 
   the_mesh.startInterface(interface_manager);
+#if defined(BLE_PIN_CODE) && defined(DISPLAY_CLASS)
+  // stay off if it was turned off before the last reboot, but only when there is a screen to turn it back on from
+  if (disp != NULL && the_mesh.getNodePrefs()->ble_disabled) {
+    interface_manager.disableBluetooth();
+  }
+#endif
   sensors.begin();
 
 #if ENV_INCLUDE_GPS == 1

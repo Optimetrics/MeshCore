@@ -24,10 +24,12 @@ public:
   virtual bool isOn() = 0;
   virtual bool isEink() { return false; } // default to non-eink, override in eink drivers
   virtual void forceFullRefresh() {} // next refresh will be full for eink
+  virtual int getPartialRefreshCount() { return 0; } // eink: partial refreshes since the last full one
   virtual void setBusyHook(void (*hook)()) {} // eink: hook is called repeatedly while waiting for panel refresh
   virtual void turnOn() = 0;
   virtual void turnOn(int max_partial) { turnOn(); }
   virtual void turnOff() = 0;
+  virtual void turnOffKeepImage() { turnOff(); }  // e-ink: power down but leave the last frame showing
   virtual void turnOff(bool blank) { turnOff(); }
   virtual void clear() = 0;
   virtual void startFrame(ColorVal bkg = UIColor::window_bkg) = 0;
@@ -35,7 +37,8 @@ public:
   virtual void setColor(ColorVal c) = 0;
   virtual void setCursor(int x, int y) = 0;
   virtual void print(const char* str) = 0;
-  virtual void printWordWrap(const char* str, int max_width) { print(str); }   // fallback to basic print() if no override
+  // returns how many chars of str were drawn (fewer than strlen when it ran out of screen)
+  virtual int printWordWrap(const char* str, int max_width) { print(str); return strlen(str); }   // fallback to basic print() if no override
   virtual void fillRect(int x, int y, int w, int h) = 0;
   virtual void drawRect(int x, int y, int w, int h) = 0;
   virtual void drawXbm(int x, int y, const uint8_t* bits, int w, int h) = 0;

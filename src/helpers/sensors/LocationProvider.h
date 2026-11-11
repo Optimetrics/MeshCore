@@ -81,6 +81,8 @@ public:
     }
     virtual void setGpsPeriod(uint32_t seconds) { }
     virtual uint32_t getGpsPeriod() const { return 0; }
+    // horizontal dilution of precision in tenths (1.1 -> 11), or -1 if unknown
+    virtual int getHDOPx10() { return -1; }
     virtual uint32_t getLastFixAge() const { // in seconds, UINT32_MAX if never
         const LastFix f = getLastFix();
         return f.valid ? (uint32_t)(millis() - f.acquiredAt) / 1000UL : UINT32_MAX;

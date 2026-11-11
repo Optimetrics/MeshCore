@@ -135,8 +135,9 @@ void ST7789Display::print(const char* str) {
   display.drawString(_x, _y, str);
 }
 
-void ST7789Display::printWordWrap(const char* str, int max_width) {
+int ST7789Display::printWordWrap(const char* str, int max_width) {
   display.drawStringMaxWidth(_x, _y, max_width*SCALE_X, str);
+  return strlen(str);
 }
 
 void ST7789Display::fillRect(int x, int y, int w, int h) {

@@ -87,7 +87,16 @@ public:
         return iface.instance->isEnabled();
       }
     }
-    return false; 
+    return false;
+  }
+
+  bool isBluetoothConnected() {
+    for(auto iface : _interfaces){
+      if(iface.instance && iface.type == InterfaceType::Bluetooth){
+        return iface.instance->isEnabled() && iface.instance->isConnected();
+      }
+    }
+    return false;
   }
 
   // enable all interfaces

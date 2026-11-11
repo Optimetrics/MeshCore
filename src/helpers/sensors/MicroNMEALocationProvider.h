@@ -256,6 +256,7 @@ public:
         return _lastFix.valid ? _lastFix.satellites : nmea.getNumSatellites();
     }
     bool isValid() override { return nmea.isValid(); }
+    int getHDOPx10() override { return nmea.isValid() ? nmea.getHDOP() : -1; }
 
     long getTimestamp() override {
         if (!nmea.isValid()) return _lastFix.timestamp;

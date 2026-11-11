@@ -58,6 +58,9 @@ public:
   virtual bool startOTAUpdate(const char *id, char reply[]) override;
   virtual void sleep(uint32_t secs) override;
   bool isExternalPowered() override;
+#ifdef NRF52_WATCHDOG_SECS
+  void loop() override { NRF_WDT->RR[0] = WDT_RR_RR_Reload; }   // boards that override loop() must call this
+#endif
 
   void attachDynamicPrefs(KeyValueStore* prefs) { }  // no-op
 
