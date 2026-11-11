@@ -409,7 +409,25 @@ bool NRF52Board::getBootloaderVersion(char* out, size_t max_len) {
     return false;
 }
 
+static SoftwareTimer ota_reset_timer;
+
+static void ota_reset_callback(TimerHandle_t) {
+  enterOTADfu();   // sets the bootloader's OTA magic and resets; does not return
+}
+
 bool NRF52Board::startOTAUpdate(const char *id, char reply[]) {
+  uint8_t sd_enabled = 0;
+  sd_softdevice_is_enabled(&sd_enabled);
+  if (sd_enabled) {
+    // BLE is already running (e.g. a BLE console), so Bluefruit.begin() below would fail and
+    // the DFU service can't be added to a live GATT table. Reboot straight into the
+    // bootloader's own BLE DFU mode instead. Deferred so this reply can be delivered first.
+    ota_reset_timer.begin(2000, ota_reset_callback, NULL, false);
+    ota_reset_timer.start();
+    strcpy(reply, "OK - rebooting into bootloader OTA mode");
+    return true;
+  }
+
   // Config the peripheral connection with maximum bandwidth
   // more SRAM required by SoftDevice
   // Note: All config***() function must be called before begin()
