@@ -1,6 +1,28 @@
 #pragma once
 
 #include <RadioLib.h>
+#include "MeshCore.h"
+
+// Undocumented register 0x8B5 bit 0, recommended by Semtech via Heltec: keeps the AGC
+// adjusting under strong interference. Calibrate(0x7F) in the AGC reset clears it, so it
+// is re-applied there as well as at init and after setParams(). A write that lands while
+// image calibration is still settling can be lost, so read it back and retry.
+inline void sx126xApplyRegisterPatch(SX126x* radio) {
+#ifdef SX126X_REGISTER_PATCH
+  uint8_t before = 0;
+  radio->readRegister(0x8B5, &before, 1);
+  uint8_t r_data = before;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    r_data |= 0x01;
+    radio->writeRegister(0x8B5, &r_data, 1);
+    r_data = 0;
+    radio->readRegister(0x8B5, &r_data, 1);
+    if (r_data & 0x01) break;
+    radio->mod->hal->delay(20);
+  }
+  MESH_DEBUG_PRINTLN("SX126x reg 0x8B5: 0x%02X -> 0x%02X", before, r_data);
+#endif
+}
 
 // Full receiver reset for all SX126x-family chips (SX1262, SX1268, LLCC68, STM32WLx).
 // Warm sleep powers down analog, Calibrate(0x7F) refreshes ADC/PLL/image calibration,
@@ -21,16 +43,14 @@ inline void sx126xResetAGC(SX126x* radio, bool rx_boost_gain) {
   // Calibrate(0x7F) defaults image calibration to 902-928MHz band.
   // Re-calibrate for the actual operating frequency.
   radio->calibrateImage(radio->freqMHz);
+  // calibrateImage() returns before the chip finishes, and BUSY does not cover the rest,
+  // so writes issued within ~10ms can be dropped. Let it settle before re-applying.
+  radio->mod->hal->delay(50);
 
 #ifdef SX126X_DIO2_AS_RF_SWITCH
   radio->setDio2AsRfSwitch(SX126X_DIO2_AS_RF_SWITCH);
 #endif
   // always reapply: the gain may have been changed at runtime even when no build default is set
   radio->setRxBoostedGainMode(rx_boost_gain);
-#ifdef SX126X_REGISTER_PATCH
-  uint8_t r_data = 0;
-  radio->readRegister(0x8B5, &r_data, 1);
-  r_data |= 0x01;
-  radio->writeRegister(0x8B5, &r_data, 1);
-#endif
+  sx126xApplyRegisterPatch(radio);
 }

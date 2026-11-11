@@ -13,10 +13,15 @@ public:
   CustomSX1262Wrapper(CustomSX1262& radio, mesh::MainBoard& board) : RadioLibWrapper(radio, board) { }
 
   void setParams(float freq, float bw, uint8_t sf, uint8_t cr) override {
+    // setFrequency() runs image calibration on a big frequency change, and that keeps going
+    // after it returns. Sleeping the chip (AGC reset) before it finishes leaves BUSY stuck high.
+    bool recal = fabsf(freq - ((CustomSX1262 *)_radio)->freqMHz) >= RADIOLIB_SX126X_CAL_IMG_FREQ_TRIG_MHZ;
     ((CustomSX1262 *)_radio)->setFrequency(freq);
     ((CustomSX1262 *)_radio)->setSpreadingFactor(sf);
     ((CustomSX1262 *)_radio)->setBandwidth(bw);
     ((CustomSX1262 *)_radio)->setCodingRate(cr);
+    if (recal) delay(50);
+    sx126xApplyRegisterPatch((CustomSX1262 *)_radio);
     updatePreamble(sf);
     PacketMillis pm = calcMaxPacketMillis(sf, bw, cr, preambleLengthForSF(sf));
     ((CustomSX1262 *)_radio)->setPreambleMillis(pm.preambleMillis);
