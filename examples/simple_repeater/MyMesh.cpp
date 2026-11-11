@@ -1177,6 +1177,10 @@ void MyMesh::formatPacketStatsReply(char *reply) {
                                        getNumRecvFlood(), getNumRecvDirect());
 }
 
+void MyMesh::formatRxDiagReply(char *reply) {
+  sprintf(reply, "{\"pool_drops\":%u}", getNumRxPoolDrops());
+}
+
 void MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   IdentityStore store(*_fs, "");
@@ -1282,6 +1286,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
+  } else if (strcmp(command, "stats-rxdiag") == 0) {
+    formatRxDiagReply(reply);
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
