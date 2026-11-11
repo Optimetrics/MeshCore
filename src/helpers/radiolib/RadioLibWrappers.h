@@ -33,6 +33,11 @@ protected:
   uint8_t _preamble_sf;
   RxDiag _rx_diag;
   uint32_t _last_diag_poll;
+  uint32_t _rx_started_ms;         // when the radio last (re)entered receive
+  uint32_t _last_floor_sample_ms;
+  uint16_t _floor_rejects;         // samples turned away since the last accepted round
+
+  void enteredRx();
 
   void idle();
   void startRecv();
@@ -46,7 +51,7 @@ protected:
 
 public:
   RadioLibWrapper(PhysicalLayer& radio, mesh::MainBoard& board)
-    : _radio(&radio), _board(&board), _preamble_sf(0) {
+    : _radio(&radio), _board(&board), _preamble_sf(0), _rx_started_ms(0), _last_floor_sample_ms(0), _floor_rejects(0) {
     n_recv = n_sent = n_recv_errors = 0;
     memset(&_rx_diag, 0, sizeof(_rx_diag));
     _last_diag_poll = 0;
