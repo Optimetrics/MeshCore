@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <target.h>
 
 #ifdef NRF52_POWER_MANAGEMENT
 // Static configuration for power management
@@ -144,7 +145,81 @@ void T096Board::attachDynamicPrefs(KeyValueStore* prefs) {
   setLoRaFemLnaEnabled(strcmp(radio_fem_rxgain, "1") == 0);
 }
 
+// Median of a burst of instantaneous RSSI readings, in dBm. A median shrugs off a packet
+// that happens to arrive mid-burst.
+static int medianNoiseDbm() {
+  const int N = 48;
+  int16_t v[N];
+  for (int i = 0; i < N; i++) {
+    v[i] = (int16_t)radio_driver.getCurrentRSSI();
+    delay(4);
+  }
+  for (int i = 1; i < N; i++) {   // insertion sort
+    int16_t x = v[i];
+    int j = i - 1;
+    while (j >= 0 && v[j] > x) { v[j + 1] = v[j]; j--; }
+    v[j + 1] = x;
+  }
+  return v[N / 2];
+}
+
+// 'noisetest': read the receiver's noise floor with one thing changed at a time, to find out
+// whether something on the board is raising it. Blocks for about 3 seconds and puts every
+// setting back. Nothing is saved to prefs.
+void T096Board::runNoiseTest(char* reply) {
+  delay(150);
+  int base = medianNoiseDbm();
+
+  // FEM LNA bypassed. The reading drops by the LNA's gain if the floor is amplified thermal noise.
+  bool lna_was = loRaFEMControl.isLNAEnabled();
+  loRaFEMControl.setLNAEnable(false);
+  loRaFEMControl.setRxModeEnable();
+  delay(150);
+  int lna_off = medianNoiseDbm();
+  loRaFEMControl.setLNAEnable(lna_was);
+  loRaFEMControl.setRxModeEnable();
+
+  // SX1262 boosted RX gain off
+  bool boost_was = radio_driver.getRxBoostedGainMode();
+  radio_driver.setRxBoostedGainMode(false);
+  delay(150);
+  int boost_off = medianNoiseDbm();
+  radio_driver.setRxBoostedGainMode(boost_was);
+
+  // Vext rail (display + GPS supply) on, and the GPS running
+  uint32_t gps_en = g_ADigitalPinMap[PIN_GPS_EN];
+  uint32_t gps_en_was = nrf_gpio_pin_out_read(gps_en);
+  bool gps_en_was_output = nrf_gpio_pin_dir_get(gps_en) == NRF_GPIO_PIN_DIR_OUTPUT;
+  periph_power.claim();
+  pinMode(PIN_GPS_EN, OUTPUT);
+  digitalWrite(PIN_GPS_EN, PIN_GPS_EN_ACTIVE);
+  delay(1500);
+  int gps_on = medianNoiseDbm();
+  if (gps_en_was_output) {
+    digitalWrite(PIN_GPS_EN, gps_en_was ? HIGH : LOW);
+  } else {
+    nrf_gpio_cfg_default(gps_en);   // nothing was driving it before
+  }
+  periph_power.release();
+
+  delay(150);
+  int after = medianNoiseDbm();   // back to the starting state: should match 'base'
+
+  sprintf(reply, "> base %d, lna_off %d, boost_off %d, gps_on %d, after %d (dBm)",
+          base, lna_off, boost_off, gps_on, after);
+}
+
 bool T096Board::handleCommand(const char* command, uint32_t sender_timestamp, char* reply) {
+  if (strcmp(command, "noisetest") == 0) {
+    if (sender_timestamp != 0) {
+      strcpy(reply, "Error: local console only");   // it blocks for about 3 seconds
+    } else if (!radio_driver.isInRecvMode()) {
+      strcpy(reply, "Error: radio busy, try again");
+    } else {
+      runNoiseTest(reply);
+    }
+    return true;
+  }
   if (strcmp(command, "get radio.fem.rxgain") == 0) {
     if (!loRaFEMControl.isLnaCanControl()) {
       strcpy(reply, "Error: unsupported");

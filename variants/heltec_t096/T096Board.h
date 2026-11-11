@@ -18,6 +18,7 @@ protected:
 
   bool setLoRaFemLnaEnabled(bool enable);
   bool isLoRaFemLnaEnabled() const;
+  void runNoiseTest(char* reply);
 
 public:
   RefCountedDigitalPin periph_power;
