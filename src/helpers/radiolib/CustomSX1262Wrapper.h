@@ -28,6 +28,13 @@ public:
     ((CustomSX1262 *)_radio)->getLoRaRxHeaderInfo(NULL, &crc);
     return crc;
   }
+  void readRadioDiag(uint32_t& hdr_err, uint32_t& preamble_only) override {
+    hdr_err = ((CustomSX1262 *)_radio)->n_hdr_err;
+    preamble_only = ((CustomSX1262 *)_radio)->n_preamble_only;
+  }
+  void resetRadioDiag() override {
+    ((CustomSX1262 *)_radio)->n_hdr_err = ((CustomSX1262 *)_radio)->n_preamble_only = 0;
+  }
   bool isReceivingPacket() override { 
     return ((CustomSX1262 *)_radio)->isReceiving();
   }

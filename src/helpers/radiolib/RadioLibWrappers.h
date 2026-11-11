@@ -11,6 +11,16 @@ struct PacketMillis {
   uint32_t payloadMillis;   // header-valid   -> rx-done deadline
 };
 
+// Why packets that started arriving did not turn into a good packet.
+struct RxDiag {
+  uint32_t crc_fail;         // fully received, but failed the payload CRC (or carried none)
+  uint32_t crc_fail_strong;  // ...of those, with SNR >= 0 dB: collision or overload, not a weak signal
+  int32_t  crc_snr_x4_sum;   // sum of SNR*4 over crc_fail
+  int32_t  crc_rssi_sum;     // sum of RSSI (dBm) over crc_fail
+  uint32_t hdr_err;          // preamble and sync word found, header failed its check
+  uint32_t preamble_only;    // preamble detected, no header followed in time
+};
+
 class RadioLibWrapper : public mesh::Radio {
 protected:
   PhysicalLayer* _radio;
@@ -21,6 +31,8 @@ protected:
   uint16_t _num_floor_samples;
   int32_t _floor_sample_sum;
   uint8_t _preamble_sf;
+  RxDiag _rx_diag;
+  uint32_t _last_diag_poll;
 
   void idle();
   void startRecv();
@@ -28,11 +40,16 @@ protected:
   virtual bool isReceivingPacket() =0;
   virtual bool lastRxHadCRC() { return true; }
   virtual void doResetAGC();
+  // radios that track header errors / abandoned preambles report and clear them here
+  virtual void readRadioDiag(uint32_t& hdr_err, uint32_t& preamble_only) { hdr_err = preamble_only = 0; }
+  virtual void resetRadioDiag() { }
 
 public:
   RadioLibWrapper(PhysicalLayer& radio, mesh::MainBoard& board)
     : _radio(&radio), _board(&board), _preamble_sf(0) {
     n_recv = n_sent = n_recv_errors = 0;
+    memset(&_rx_diag, 0, sizeof(_rx_diag));
+    _last_diag_poll = 0;
   }
 
   void begin() override;
@@ -72,7 +89,16 @@ public:
   uint32_t getPacketsRecv() const { return n_recv; }
   uint32_t getPacketsRecvErrors() const { return n_recv_errors; }
   uint32_t getPacketsSent() const { return n_sent; }
-  void resetStats() { n_recv = n_sent = n_recv_errors = 0; }
+  void resetStats() {
+    n_recv = n_sent = n_recv_errors = 0;
+    memset(&_rx_diag, 0, sizeof(_rx_diag));
+    resetRadioDiag();
+  }
+  RxDiag getRxDiag() {
+    RxDiag d = _rx_diag;
+    readRadioDiag(d.hdr_err, d.preamble_only);
+    return d;
+  }
 
   virtual float getLastRSSI() const override;
   virtual float getLastSNR() const override;
